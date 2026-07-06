@@ -5,7 +5,8 @@ AXION_COMMON_KERNEL_MODULES := \
     ax_affinity_guard \
     ax_boost \
     ax_atcm \
-    ax_frame_boost
+    ax_frame_boost \
+    ax_burst_sched
 
 ifneq ($(strip $(TARGET_KERNEL_SOURCE)),)
 ifeq ($(strip $(TARGET_PREBUILT_KERNEL)),)
