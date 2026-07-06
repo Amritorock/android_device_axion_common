@@ -20,8 +20,19 @@
 #define AX_SCHED_RENDER_THREAD "RenderThread"
 #define AX_SCHED_HWUI_TASK "hwuiTask"
 #define AX_SCHED_GL_THREAD "GLThread"
+#define AX_SCHED_ANDROID_ANIM "android.anim"
+#define AX_SCHED_ANDROID_ANIM_LF "android.anim.lf"
+#define AX_SCHED_ANDROID_DISPLAY "android.display"
+#define AX_SCHED_ANDROID_UI "android.ui"
+#define AX_SCHED_POWER_MANAGER "PowerManagerSer"
+#define AX_SCHED_PHOTONIC_MODULATOR "PhotonicModulat"
 #define AX_SCHED_HWC_RELEASE "HWC release"
 #define AX_SCHED_GPU_COMPLETION "GPU completion"
+#define AX_SCHED_ALLOCATE_BUFFERS "allocateBuffers"
+#define AX_SCHED_KGSL_WORKER "kgsl_worker_thr"
+#define AX_SCHED_HWC_ASYNC_WORKER "HwcAsyncWorker"
+#define AX_SCHED_RE_COMPLETION "RE Completion"
+#define AX_SCHED_SF_BACKGROUND_EXEC "BckgrndExec"
 #define AX_SCHED_CHROME_IO_THREAD "Chrome_IOThread"
 #define AX_SCHED_CHROME_CHILD_IO "Chrome_ChildIOT"
 #define AX_SCHED_CHROME_INPROC "Chrome_InProc"
@@ -70,6 +81,7 @@ static inline bool ax_sched_comm_matches_render_helper(const char *comm)
 					 sizeof(AX_SCHED_GL_THREAD) - 1) ||
 		!strcmp(comm, AX_SCHED_HWC_RELEASE) ||
 		!strcmp(comm, AX_SCHED_GPU_COMPLETION) ||
+		!strcmp(comm, AX_SCHED_ALLOCATE_BUFFERS) ||
 		ax_sched_comm_has_prefix(comm, AX_SCHED_CHROME_IO_THREAD,
 					 sizeof(AX_SCHED_CHROME_IO_THREAD) - 1) ||
 		ax_sched_comm_has_prefix(comm, AX_SCHED_CHROME_CHILD_IO,

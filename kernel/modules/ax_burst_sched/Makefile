@@ -26,5 +26,8 @@ ccflags-y += -DAX_BS_HAS_SVP_POLICY
 endif
 ifneq ($(wildcard $(srctree)/include/trace/hooks/rwsem.h),)
 ccflags-y += -DAX_BS_HAS_RWSEM_HOOK
+ifneq ($(wildcard $(srctree)/include/trace/hooks/dtask.h),)
+ccflags-y += -DAX_BS_HAS_MUTEX_HOOK
+endif
 endif
 endif

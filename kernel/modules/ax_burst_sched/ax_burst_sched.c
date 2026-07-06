@@ -12,6 +12,7 @@
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/pid.h>
 #include <linux/proc_fs.h>
 #include <linux/rcupdate.h>
@@ -34,6 +35,9 @@
 #if defined(AX_BS_HAS_RWSEM_HOOK) && !defined(CONFIG_PREEMPT_RT)
 #include <trace/hooks/rwsem.h>
 #define AX_BS_HAS_LOCK_BOOST
+#endif
+#if defined(AX_BS_HAS_MUTEX_HOOK) && defined(AX_BS_HAS_LOCK_BOOST)
+#include <trace/hooks/dtask.h>
 #endif
 
 #define AX_BS_MAX_TARGETS 16
@@ -904,9 +908,12 @@ static bool ax_bs_should_hold_migration(struct ax_bs_target *target)
 static bool ax_bs_task_is_system_helper(struct task_struct *task)
 {
 	return task &&
-		(!strcmp(task->comm, "android.anim") ||
-		 !strcmp(task->comm, "android.anim.lf") ||
-		 !strcmp(task->comm, "android.display") ||
+		(!strcmp(task->comm, AX_SCHED_ANDROID_ANIM) ||
+		 !strcmp(task->comm, AX_SCHED_ANDROID_ANIM_LF) ||
+		 !strcmp(task->comm, AX_SCHED_ANDROID_DISPLAY) ||
+		 !strcmp(task->comm, AX_SCHED_ANDROID_UI) ||
+		 !strcmp(task->comm, AX_SCHED_POWER_MANAGER) ||
+		 !strcmp(task->comm, AX_SCHED_PHOTONIC_MODULATOR) ||
 		 !strcmp(task->comm, "InputReader") ||
 		 !strcmp(task->comm, "InputDispatcher"));
 }
@@ -1199,7 +1206,13 @@ static bool ax_bs_task_is_support_worker(struct task_struct *task)
 {
 	return task &&
 		(!strcmp(task->comm, "kgsl-events") ||
+		 !strcmp(task->comm, AX_SCHED_KGSL_WORKER) ||
 		 !strcmp(task->comm, "surfaceflinger") ||
+		 !strcmp(task->comm, AX_SCHED_HWC_ASYNC_WORKER) ||
+		 !strcmp(task->comm, AX_SCHED_RE_COMPLETION) ||
+		 !strcmp(task->comm, AX_SCHED_GPU_COMPLETION) ||
+		 ax_sched_comm_has_prefix(task->comm, AX_SCHED_SF_BACKGROUND_EXEC,
+					  sizeof(AX_SCHED_SF_BACKGROUND_EXEC) - 1) ||
 		 ax_sched_comm_has_prefix(task->comm, "RenderEngine",
 					  sizeof("RenderEngine") - 1) ||
 		 ax_sched_comm_has_prefix(task->comm, "f2fs_ckpt-",
@@ -2410,6 +2423,47 @@ static void ax_bs_rwsem_write_finished(void *unused, struct rw_semaphore *sem)
 {
 	ax_bs_clear_lock_task(current);
 }
+
+#if defined(AX_BS_HAS_MUTEX_HOOK)
+#define AX_BS_MUTEX_OWNER_FLAGS 0x07
+
+static struct task_struct *ax_bs_mutex_owner(struct mutex *lock)
+{
+	unsigned long owner;
+
+	if (!lock)
+		return NULL;
+
+	owner = atomic_long_read(&lock->owner);
+	owner &= ~AX_BS_MUTEX_OWNER_FLAGS;
+	if (!owner)
+		return NULL;
+
+	return (struct task_struct *)owner;
+}
+
+static void ax_bs_mutex_wait_start(void *unused, struct mutex *lock)
+{
+	struct task_struct *owner;
+	unsigned int util;
+
+	if (!READ_ONCE(ax_bs_enabled) || !READ_ONCE(ax_bs_lock_boost))
+		return;
+
+	util = ax_bs_lock_waiter_util(current);
+	if (!util)
+		return;
+
+	owner = ax_bs_mutex_owner(lock);
+	if (ax_bs_track_lock_owner(owner, util))
+		atomic64_inc(&ax_bs_lock_assists);
+}
+
+static void ax_bs_mutex_wait_finish(void *unused, struct mutex *lock)
+{
+	ax_bs_clear_lock_task(current);
+}
+#endif
 #endif
 
 static bool ax_bs_pick_task_rq(struct task_struct *task,
@@ -3271,6 +3325,18 @@ static int __init ax_burst_sched_init(void)
 			ax_bs_rwsem_write_finished, NULL);
 	if (ret)
 		goto unregister_rwsem_wake;
+
+#if defined(AX_BS_HAS_MUTEX_HOOK)
+	ret = register_trace_android_vh_mutex_wait_start(ax_bs_mutex_wait_start,
+							 NULL);
+	if (ret)
+		goto unregister_rwsem_write_finished;
+
+	ret = register_trace_android_vh_mutex_wait_finish(ax_bs_mutex_wait_finish,
+							  NULL);
+	if (ret)
+		goto unregister_mutex_wait_start;
+#endif
 #endif
 
 #if defined(AX_BS_HAS_UCLAMP_EFF_GET) && defined(CONFIG_UCLAMP_TASK)
@@ -3278,7 +3344,11 @@ static int __init ax_burst_sched_init(void)
 						       NULL);
 	if (ret) {
 #if defined(AX_BS_HAS_LOCK_BOOST)
+#if defined(AX_BS_HAS_MUTEX_HOOK)
+		goto unregister_mutex_wait_finish;
+#else
 		goto unregister_rwsem_write_finished;
+#endif
 #else
 		tracepoint_synchronize_unregister();
 		ax_bs_remove_proc();
@@ -3357,7 +3427,17 @@ unregister_uclamp:
 	ax_sched_unregister_hook(android_rvh_uclamp_eff_get,
 				 ax_bs_uclamp_eff_get, NULL);
 #endif
-#if defined(AX_BS_HAS_LOCK_BOOST) && defined(AX_BS_HAS_UCLAMP_EFF_GET) && defined(CONFIG_UCLAMP_TASK)
+#if defined(AX_BS_HAS_LOCK_BOOST) && defined(AX_BS_HAS_MUTEX_HOOK) && defined(AX_BS_HAS_UCLAMP_EFF_GET) && defined(CONFIG_UCLAMP_TASK)
+unregister_mutex_wait_finish:
+#endif
+#if defined(AX_BS_HAS_LOCK_BOOST) && defined(AX_BS_HAS_MUTEX_HOOK)
+	ax_sched_unregister_hook(android_vh_mutex_wait_finish,
+				 ax_bs_mutex_wait_finish, NULL);
+unregister_mutex_wait_start:
+	ax_sched_unregister_hook(android_vh_mutex_wait_start,
+				 ax_bs_mutex_wait_start, NULL);
+#endif
+#if defined(AX_BS_HAS_LOCK_BOOST) && (defined(AX_BS_HAS_MUTEX_HOOK) || (defined(AX_BS_HAS_UCLAMP_EFF_GET) && defined(CONFIG_UCLAMP_TASK)))
 unregister_rwsem_write_finished:
 #endif
 #if defined(AX_BS_HAS_LOCK_BOOST)
@@ -3409,6 +3489,12 @@ static void __exit ax_burst_sched_exit(void)
 				 ax_bs_uclamp_eff_get, NULL);
 #endif
 #if defined(AX_BS_HAS_LOCK_BOOST)
+#if defined(AX_BS_HAS_MUTEX_HOOK)
+	ax_sched_unregister_hook(android_vh_mutex_wait_finish,
+				 ax_bs_mutex_wait_finish, NULL);
+	ax_sched_unregister_hook(android_vh_mutex_wait_start,
+				 ax_bs_mutex_wait_start, NULL);
+#endif
 	ax_sched_unregister_hook(android_vh_rwsem_write_finished,
 				 ax_bs_rwsem_write_finished, NULL);
 	ax_sched_unregister_hook(android_vh_rwsem_wake, ax_bs_rwsem_wake, NULL);
