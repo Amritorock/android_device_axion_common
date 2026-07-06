@@ -2,7 +2,8 @@ AXION_COMMON_PATH := device/axion/common
 AXION_COMMON_MODULE_ROOT := $(AXION_COMMON_PATH)/kernel/modules
 AXION_COMMON_KERNEL_MODULES := \
     ax_thread_snooper \
-    ax_affinity_guard
+    ax_affinity_guard \
+    ax_boost
 
 ifneq ($(strip $(TARGET_KERNEL_SOURCE)),)
 ifeq ($(strip $(TARGET_PREBUILT_KERNEL)),)
