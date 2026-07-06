@@ -13,3 +13,8 @@ ccflags-y += -DAX_BINDER_HAS_FRAME_BOOST
 KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_frame_boost/Module.symvers))
 endif
 endif
+
+ifeq ($(axion_binder_obs),y)
+obj-m += ax_binder_obs.o
+ccflags-y += -I$(srctree)/drivers/android
+endif
