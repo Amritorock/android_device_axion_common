@@ -4,7 +4,8 @@ AXION_COMMON_KERNEL_MODULES := \
     ax_thread_snooper \
     ax_affinity_guard \
     ax_boost \
-    ax_atcm
+    ax_atcm \
+    ax_frame_boost
 
 ifneq ($(strip $(TARGET_KERNEL_SOURCE)),)
 ifeq ($(strip $(TARGET_PREBUILT_KERNEL)),)
