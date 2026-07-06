@@ -42,3 +42,7 @@ ro.input.video_enabled=false
 
 # EGL shader cache
 ro.egl.blobcache.multifile_limit=67108864
+
+# vulkan first
+debug.renderengine.backend=skiavkthreaded
+debug.hwui.renderer=skiavk
