@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<kernel-manager>
+    <cpu
+        id="little"
+        group="Little CPU"
+        minId="axion_min_freq"
+        maxId="axion_max_freq"
+        governorId="little_cpu_governor"
+        minNode="/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq"
+        maxNode="/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq"
+        availablePath="/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies"
+        governorNode="/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+        governorAvailablePath="/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors" />
+
+    <cpu
+        id="big"
+        group="Big CPU"
+        minId="axion_min_freq_big"
+        maxId="axion_max_freq_big"
+        governorId="big_cpu_governor"
+        minNode="/sys/devices/system/cpu/cpu6/cpufreq/scaling_min_freq"
+        maxNode="/sys/devices/system/cpu/cpu6/cpufreq/scaling_max_freq"
+        availablePath="/sys/devices/system/cpu/cpu6/cpufreq/scaling_available_frequencies"
+        governorNode="/sys/devices/system/cpu/cpu6/cpufreq/scaling_governor"
+        governorAvailablePath="/sys/devices/system/cpu/cpu6/cpufreq/scaling_available_governors" />
+
+    <gpu
+        node="/sys/class/kgsl/kgsl-3d0/devfreq"
+        values="266000000,490000000,650000000,840000000" />
+</kernel-manager>

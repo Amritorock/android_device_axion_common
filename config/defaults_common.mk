@@ -26,6 +26,9 @@ PRODUCT_DEXPREOPT_SPEED_APPS += \
     GameSpace \
     AppLocker
 
+TARGET_DISABLES_LIBPERF ?= false
+TARGET_SHIPS_AXION_KERNEL_MODULES ?= false
+TARGET_SUPPORTS_KERNEL_MANAGER ?= false
 TARGET_INCLUDE_AXFX ?= false
 ifeq ($(TARGET_INCLUDE_AXFX),true)
 $(call inherit-product-if-exists, packages/apps/AxionFx/config.mk)
