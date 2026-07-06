@@ -14,7 +14,8 @@ PRODUCT_PACKAGES += \
     EdgeLauncher \
     GameSpace \
     OmniJaws \
-    ColumbusService
+    ColumbusService \
+    AxDiagnostics
 
 # eliminate interpreter overhead
 PRODUCT_DEXPREOPT_SPEED_APPS += \
