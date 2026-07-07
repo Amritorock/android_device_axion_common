@@ -1162,6 +1162,46 @@ static int ax_bs_best_cpu(struct task_struct *task)
 	return best_cpu;
 }
 
+static int ax_bs_fit_cpu(struct task_struct *task, unsigned int util)
+{
+	unsigned int fallback_score = 0;
+	unsigned int best_score = ~0U;
+	unsigned int best_pressure = ~0U;
+	int fallback_cpu = AX_SCHED_CPU_NONE;
+	int best_cpu = AX_SCHED_CPU_NONE;
+	int cpu;
+
+	if (!task)
+		return AX_SCHED_CPU_NONE;
+
+	for_each_online_cpu(cpu) {
+		unsigned int pressure;
+		unsigned int score;
+
+		if (!cpumask_test_cpu(cpu, task->cpus_ptr))
+			continue;
+
+		score = ax_bs_get_cpu_score(cpu);
+		pressure = ax_bs_cpu_pressure_score(cpu);
+		if (score > fallback_score) {
+			fallback_score = score;
+			fallback_cpu = cpu;
+		}
+
+		if (util && arch_scale_cpu_capacity(cpu) < util)
+			continue;
+
+		if (score < best_score ||
+		    (score == best_score && pressure <= best_pressure)) {
+			best_score = score;
+			best_pressure = pressure;
+			best_cpu = cpu;
+		}
+	}
+
+	return best_cpu >= 0 ? best_cpu : fallback_cpu;
+}
+
 static int ax_bs_lowest_cpu(struct task_struct *task)
 {
 	unsigned int best_score = ~0U;
@@ -1192,9 +1232,15 @@ static int ax_bs_lowest_cpu(struct task_struct *task)
 	return best_cpu;
 }
 
-static int ax_bs_pick_cpu(struct task_struct *task)
+static int ax_bs_pick_cpu(struct task_struct *task, unsigned int util,
+			  bool prefer_peak)
 {
-	int cpu = ax_bs_best_cpu(task);
+	int cpu;
+
+	if (prefer_peak)
+		cpu = ax_bs_best_cpu(task);
+	else
+		cpu = ax_bs_fit_cpu(task, util);
 
 	if (cpu >= 0)
 		ax_bs_note_cpu_pick(cpu);
@@ -2549,6 +2595,7 @@ static bool ax_bs_pick_task_rq(struct task_struct *task,
 	unsigned int lock_util;
 	unsigned int support_util;
 	unsigned int target_util;
+	unsigned int util;
 	int cpu;
 
 	if (!pick || !READ_ONCE(ax_bs_big_only))
@@ -2561,7 +2608,9 @@ static bool ax_bs_pick_task_rq(struct task_struct *task,
 	if (!target_util && !lock_util && !support_util)
 		return false;
 
-	cpu = ax_bs_pick_cpu(task);
+	util = max_t(unsigned int, target_util,
+		     max_t(unsigned int, lock_util, support_util));
+	cpu = ax_bs_pick_cpu(task, util, target_util || lock_util);
 	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_BURST))
 		return false;
 
@@ -2586,6 +2635,7 @@ static bool ax_bs_pick_fallback_rq(int prev_cpu, struct task_struct *task,
 	unsigned int lock_util;
 	unsigned int support_util;
 	unsigned int target_util;
+	unsigned int util;
 	int cpu;
 
 	if (!pick || !READ_ONCE(ax_bs_fallback_big))
@@ -2598,7 +2648,9 @@ static bool ax_bs_pick_fallback_rq(int prev_cpu, struct task_struct *task,
 	if (!target_util && !lock_util && !support_util)
 		return false;
 
-	cpu = ax_bs_pick_cpu(task);
+	util = max_t(unsigned int, target_util,
+		     max_t(unsigned int, lock_util, support_util));
+	cpu = ax_bs_pick_cpu(task, util, target_util || lock_util);
 	if (cpu == prev_cpu ||
 	    !ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_BURST))
 		return false;
