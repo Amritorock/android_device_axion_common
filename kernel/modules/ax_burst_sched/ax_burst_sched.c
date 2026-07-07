@@ -1274,14 +1274,15 @@ static bool ax_bs_task_is_latency_exempt(struct task_struct *task)
 		!strcmp(task->comm, "surfaceflinger");
 }
 
-static bool ax_bs_task_is_tick_limited(struct task_struct *task)
+static bool ax_bs_task_is_background_guard_candidate(struct task_struct *task)
 {
 	if (!task || !ax_bs_has_transient_scene())
 		return false;
 	if (ax_bs_task_is_latency_exempt(task))
 		return false;
-	if (ax_bs_task_is_background_worker(task) ||
-	    ax_bs_task_is_reclaim_worker(task))
+	if (ax_bs_task_is_reclaim_worker(task))
+		return false;
+	if (ax_bs_task_is_background_worker(task))
 		return true;
 	if (task->flags & PF_KTHREAD)
 		return false;
@@ -1295,8 +1296,7 @@ static bool ax_bs_pick_background_rq(struct task_struct *task, int prev_cpu,
 	int cpu;
 
 	if (!pick || !READ_ONCE(ax_bs_background_guard) ||
-	    !ax_bs_task_is_tick_limited(task) ||
-	    ax_bs_task_is_reclaim_worker(task))
+	    !ax_bs_task_is_background_guard_candidate(task))
 		return false;
 
 	cpu = ax_bs_lowest_cpu(task);
