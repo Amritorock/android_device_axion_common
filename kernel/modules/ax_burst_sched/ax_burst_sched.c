@@ -1007,6 +1007,9 @@ static unsigned int ax_bs_lock_task_util(struct task_struct *task)
 #endif
 
 static unsigned int ax_bs_support_task_util(struct task_struct *task);
+#if defined(AX_BS_HAS_SVP_POLICY)
+static unsigned int ax_svp_task_util(struct task_struct *task);
+#endif
 
 static unsigned int ax_bs_task_util(struct task_struct *task)
 {
@@ -1239,14 +1242,61 @@ static bool ax_bs_task_is_background_worker(struct task_struct *task)
 		 ax_bs_task_is_launcher_background_worker(task));
 }
 
+static unsigned int ax_bs_latency_task_util(struct task_struct *task)
+{
+	unsigned int util;
+
+	if (!task)
+		return 0;
+
+	util = max_t(unsigned int, ax_bs_target_util(ax_bs_match_target(task)),
+		     ax_bs_lock_task_util(task));
+#if defined(AX_BS_HAS_FRAME_BOOST)
+	util = max_t(unsigned int, util, ax_frame_boost_task_util(task));
+#endif
+#if defined(AX_BS_HAS_SVP_POLICY)
+	util = max_t(unsigned int, util, ax_svp_task_util(task));
+#endif
+
+	return util;
+}
+
+static bool ax_bs_task_is_latency_exempt(struct task_struct *task)
+{
+	if (!task)
+		return false;
+
+	return ax_bs_latency_task_util(task) ||
+		ax_sched_task_is_render_helper(task) ||
+		!strcmp(task->comm, AX_SCHED_ANDROID_UI) ||
+		!strcmp(task->comm, AX_SCHED_ANDROID_DISPLAY) ||
+		!strcmp(task->comm, "system_server") ||
+		!strcmp(task->comm, "surfaceflinger");
+}
+
+static bool ax_bs_task_is_tick_limited(struct task_struct *task)
+{
+	if (!task || !ax_bs_has_transient_scene())
+		return false;
+	if (ax_bs_task_is_latency_exempt(task))
+		return false;
+	if (ax_bs_task_is_background_worker(task) ||
+	    ax_bs_task_is_reclaim_worker(task))
+		return true;
+	if (task->flags & PF_KTHREAD)
+		return false;
+
+	return task_nice(task) > 0;
+}
+
 static bool ax_bs_pick_background_rq(struct task_struct *task, int prev_cpu,
 				     struct ax_sched_cpu_pick *pick)
 {
 	int cpu;
 
 	if (!pick || !READ_ONCE(ax_bs_background_guard) ||
-	    !ax_bs_has_transient_scene() ||
-	    !ax_bs_task_is_background_worker(task))
+	    !ax_bs_task_is_tick_limited(task) ||
+	    ax_bs_task_is_reclaim_worker(task))
 		return false;
 
 	cpu = ax_bs_lowest_cpu(task);
