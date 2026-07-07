@@ -546,7 +546,7 @@ static struct pid *ax_bs_set_target_locked(struct ax_bs_target *target, pid_t pi
 		READ_ONCE(target->role) == role &&
 		READ_ONCE(target->sticky) == sticky;
 	unsigned long last_wake_jiffies = preserve ?
-		READ_ONCE(target->last_wake_jiffies) : 0;
+		READ_ONCE(target->last_wake_jiffies) : jiffies;
 	unsigned int score = preserve ? atomic_read(&target->score) :
 		ax_bs_clamp_score(READ_ONCE(ax_bs_initial_score));
 	s64 wakeups = preserve ? atomic64_read(&target->wakeups) : 0;
@@ -768,6 +768,26 @@ static void ax_bs_cleanup_work_fn(struct work_struct *work)
 	ax_bs_schedule_cleanup(delay);
 }
 
+static bool ax_bs_target_score_active(struct ax_bs_target *target)
+{
+	unsigned long last;
+	unsigned long window;
+
+	if (!target)
+		return false;
+
+	last = READ_ONCE(target->last_wake_jiffies);
+	if (!last)
+		return false;
+
+	window = max_t(unsigned long,
+		       msecs_to_jiffies(max_t(unsigned int,
+					      READ_ONCE(ax_bs_score_window_ms),
+					      1)),
+		       1);
+	return time_before(jiffies, last + window);
+}
+
 static unsigned int ax_bs_target_util(struct ax_bs_target *target)
 {
 	unsigned int base;
@@ -788,7 +808,8 @@ static unsigned int ax_bs_target_util(struct ax_bs_target *target)
 		base = max_t(unsigned int, base,
 			     ax_sched_clamp_util(READ_ONCE(ax_bs_scene_util)));
 	cap = ax_sched_clamp_util(READ_ONCE(ax_bs_util_cap));
-	score = ax_bs_clamp_score(atomic_read(&target->score));
+	score = ax_bs_target_score_active(target) ?
+		ax_bs_clamp_score(atomic_read(&target->score)) : 0;
 	if (cap <= base)
 		return cap;
 
