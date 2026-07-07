@@ -830,47 +830,6 @@ static bool ax_bs_has_transient_scene(void)
 	return ax_bs_active_scene_util() != 0;
 }
 
-static bool ax_bs_target_is_interaction_scene(struct ax_bs_target *target)
-{
-	int source;
-	int mode;
-
-	if (!ax_bs_target_active(target))
-		return false;
-
-	mode = READ_ONCE(target->mode);
-	if (mode == AX_BS_MODE_ANIMATION || mode == AX_BS_MODE_REMOTE)
-		return true;
-
-	if (mode != AX_BS_MODE_PERF)
-		return false;
-
-	source = READ_ONCE(target->source);
-	return source == AX_BS_SOURCE_ADPF_GPU ||
-		source == AX_BS_SOURCE_POWER_INTERACTION ||
-		source == AX_BS_SOURCE_POWER_DISPLAY ||
-		source == AX_BS_SOURCE_POWER_RENDER;
-}
-
-static bool ax_bs_has_interaction_scene(void)
-{
-	int i;
-
-#if defined(AX_BS_HAS_FRAME_BOOST)
-	if (READ_ONCE(ax_bs_enabled) && ax_frame_boost_active_util())
-		return true;
-#endif
-	if (!READ_ONCE(ax_bs_enabled))
-		return false;
-
-	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
-		if (ax_bs_target_is_interaction_scene(&ax_bs_targets[i]))
-			return true;
-	}
-
-	return false;
-}
-
 static bool ax_bs_target_recent_wakeup(struct ax_bs_target *target)
 {
 	unsigned int hold_ms;
@@ -984,6 +943,32 @@ static struct ax_bs_target *ax_bs_match_target(struct task_struct *task)
 	}
 
 	return NULL;
+}
+
+static bool ax_bs_task_has_role(struct task_struct *task, int role)
+{
+	pid_t pid;
+	int i;
+
+	if (!task || !READ_ONCE(ax_bs_enabled))
+		return false;
+
+	pid = task_tgid_nr(task);
+	if (pid <= 0)
+		return false;
+
+	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
+		struct ax_bs_target *target = &ax_bs_targets[i];
+
+		if (!ax_bs_target_active(target))
+			continue;
+		if (READ_ONCE(target->pid) != pid)
+			continue;
+		if (READ_ONCE(target->role) == role)
+			return true;
+	}
+
+	return false;
 }
 
 #if defined(AX_BS_HAS_LOCK_BOOST)
@@ -1227,13 +1212,25 @@ static unsigned int ax_bs_support_task_util(struct task_struct *task)
 	return ax_sched_clamp_util(READ_ONCE(ax_bs_support_worker_util));
 }
 
+static bool ax_bs_task_is_launcher_background_worker(struct task_struct *task)
+{
+	return ax_bs_task_has_role(task, AX_BS_ROLE_LAUNCHER) &&
+		(!strcmp(task->comm, "BackgroundExecu") ||
+		 !strcmp(task->comm, "launcher-loader") ||
+		 ax_sched_comm_has_prefix(task->comm, "LauncherBg",
+					  sizeof("LauncherBg") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "TaskThumbnail",
+					  sizeof("TaskThumbnail") - 1));
+}
+
 static bool ax_bs_task_is_background_worker(struct task_struct *task)
 {
 	return task &&
 		(!strcmp(task->comm, "ll.splashworker") ||
 		 !strcmp(task->comm, "SysUiBg") ||
 		 ax_sched_comm_has_prefix(task->comm, "SystemUIBg-",
-					  sizeof("SystemUIBg-") - 1));
+					  sizeof("SystemUIBg-") - 1) ||
+		 ax_bs_task_is_launcher_background_worker(task));
 }
 
 static bool ax_bs_pick_background_rq(struct task_struct *task, int prev_cpu,
@@ -1242,7 +1239,7 @@ static bool ax_bs_pick_background_rq(struct task_struct *task, int prev_cpu,
 	int cpu;
 
 	if (!pick || !READ_ONCE(ax_bs_background_guard) ||
-	    !ax_bs_has_interaction_scene() ||
+	    !ax_bs_has_transient_scene() ||
 	    !ax_bs_task_is_background_worker(task))
 		return false;
 
@@ -1251,6 +1248,7 @@ static bool ax_bs_pick_background_rq(struct task_struct *task, int prev_cpu,
 	    !ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_BURST))
 		return false;
 
+	ax_bs_note_cpu_pick(cpu);
 	atomic64_inc(&ax_bs_background_guard_assists);
 	return true;
 }
@@ -1272,6 +1270,7 @@ static bool ax_bs_pick_reclaim_rq(struct task_struct *task, int prev_cpu,
 	    !ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_BURST))
 		return false;
 
+	ax_bs_note_cpu_pick(cpu);
 	atomic64_inc(&ax_bs_reclaim_assists);
 	return true;
 }
