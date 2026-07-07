@@ -1183,8 +1183,14 @@ static bool ax_bs_task_is_reclaim_worker(struct task_struct *task)
 	return task &&
 		(ax_sched_comm_has_prefix(task->comm, "kswapd",
 					  sizeof("kswapd") - 1) ||
-			 ax_sched_comm_has_prefix(task->comm, "kcompactd",
-					  sizeof("kcompactd") - 1));
+		 ax_sched_comm_has_prefix(task->comm, "kcompactd",
+					  sizeof("kcompactd") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "zram",
+					  sizeof("zram") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "zswap",
+					  sizeof("zswap") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "vmscan",
+					  sizeof("vmscan") - 1));
 }
 
 static bool ax_bs_task_is_support_worker(struct task_struct *task)
