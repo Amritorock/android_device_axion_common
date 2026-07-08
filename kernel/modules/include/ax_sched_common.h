@@ -18,6 +18,8 @@
 	tracepoint_probe_unregister(&__tracepoint_##name, (void *)(probe), data)
 
 #define AX_SCHED_RENDER_THREAD "RenderThread"
+#define AX_SCHED_GPU_THREAD "GPU"
+#define AX_SCHED_HWC_THREAD "HWC"
 #define AX_SCHED_HWUI_TASK "hwuiTask"
 #define AX_SCHED_GL_THREAD "GLThread"
 #define AX_SCHED_ANDROID_ANIM "android.anim"
@@ -83,6 +85,8 @@ static inline bool ax_sched_comm_has_prefix(const char *comm, const char *prefix
 static inline bool ax_sched_comm_matches_render_helper(const char *comm)
 {
 	return !strcmp(comm, AX_SCHED_RENDER_THREAD) ||
+		!strcmp(comm, AX_SCHED_GPU_THREAD) ||
+		!strcmp(comm, AX_SCHED_HWC_THREAD) ||
 		ax_sched_comm_has_prefix(comm, AX_SCHED_HWUI_TASK,
 					 sizeof(AX_SCHED_HWUI_TASK) - 1) ||
 		ax_sched_comm_has_prefix(comm, AX_SCHED_GL_THREAD,

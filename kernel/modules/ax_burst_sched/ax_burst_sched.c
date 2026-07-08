@@ -86,7 +86,7 @@
 #define AX_BS_DEFAULT_LAUNCHER_UTIL 864
 #define AX_BS_DEFAULT_TOP_ROLE_UTIL 864
 #define AX_BS_DEFAULT_SCENE_UTIL 896
-#define AX_BS_DEFAULT_SUPPORT_WORKER_UTIL 736
+#define AX_BS_DEFAULT_SUPPORT_WORKER_UTIL 800
 #define AX_BS_DEFAULT_UTIL_CAP 960
 #define AX_BS_DEFAULT_INITIAL_SCORE 160
 #define AX_BS_DEFAULT_SCORE_GAIN 40
@@ -97,6 +97,7 @@
 #define AX_BS_DEFAULT_MIGRATION_HOLD_MS 10
 #define AX_BS_DEFAULT_TOP_APP_HOT_SCORE 160
 #define AX_BS_DEFAULT_TOP_APP_PRIO 119
+#define AX_BS_DEFAULT_SYSTEMUI_PREEMPTS_TOP_APP 1
 #define AX_BS_MAX_LOCK_TARGETS 32
 #define AX_BS_DEFAULT_LOCK_UTIL 704
 #define AX_BS_DEFAULT_LOCK_MAX_UTIL 896
@@ -204,6 +205,11 @@ module_param_named(top_app_hot_score, ax_bs_top_app_hot_score, uint, 0644);
 
 static unsigned int ax_bs_top_app_prio = AX_BS_DEFAULT_TOP_APP_PRIO;
 module_param_named(top_app_prio, ax_bs_top_app_prio, uint, 0644);
+
+static unsigned int ax_bs_systemui_preempts_top_app =
+	AX_BS_DEFAULT_SYSTEMUI_PREEMPTS_TOP_APP;
+module_param_named(systemui_preempts_top_app, ax_bs_systemui_preempts_top_app,
+		   uint, 0644);
 
 static unsigned int ax_bs_spread_active = 1;
 module_param_named(spread_active, ax_bs_spread_active, uint, 0644);
@@ -409,6 +415,24 @@ static bool ax_bs_target_active(struct ax_bs_target *target)
 		READ_ONCE(target->mode) > 0 &&
 		(READ_ONCE(target->sticky) ||
 		 time_before(jiffies, READ_ONCE(target->expire_jiffies)));
+}
+
+static bool ax_bs_has_transient_role(int role)
+{
+	int i;
+
+	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
+		struct ax_bs_target *target = &ax_bs_targets[i];
+
+		if (!ax_bs_target_active(target))
+			continue;
+		if (READ_ONCE(target->mode) == AX_BS_MODE_TOP_APP)
+			continue;
+		if (READ_ONCE(target->role) == role)
+			return true;
+	}
+
+	return false;
 }
 
 static bool ax_bs_target_alive(struct ax_bs_target *target)
@@ -961,6 +985,17 @@ static bool ax_bs_task_is_launcher_ui_helper(struct task_struct *task)
 	return task && !strcmp(task->comm, AX_SCHED_LAUNCHER_UI_HELPER);
 }
 
+static bool ax_bs_systemui_preempts_target(struct ax_bs_target *target)
+{
+	if (!READ_ONCE(ax_bs_systemui_preempts_top_app))
+		return false;
+	if (READ_ONCE(target->mode) != AX_BS_MODE_TOP_APP ||
+	    READ_ONCE(target->role) != AX_BS_ROLE_TOP_APP)
+		return false;
+
+	return ax_bs_has_transient_role(AX_BS_ROLE_SYSTEM_UI);
+}
+
 static bool ax_bs_target_matches(struct ax_bs_target *target,
 					 struct task_struct *task)
 {
@@ -981,6 +1016,9 @@ static bool ax_bs_target_matches(struct ax_bs_target *target,
 	}
 
 	if (READ_ONCE(target->source) == AX_BS_SOURCE_START_ACTIVITY_BINDER)
+		return false;
+
+	if (ax_bs_systemui_preempts_target(target))
 		return false;
 
 	if (READ_ONCE(target->role) == AX_BS_ROLE_SYSTEM_SERVER &&
@@ -1374,7 +1412,8 @@ static unsigned int ax_bs_support_task_util(struct task_struct *task)
 
 static bool ax_bs_task_is_launcher_background_worker(struct task_struct *task)
 {
-	return ax_bs_task_has_role(task, AX_BS_ROLE_LAUNCHER) &&
+	return (ax_bs_task_has_role(task, AX_BS_ROLE_LAUNCHER) ||
+		ax_bs_task_has_role(task, AX_BS_ROLE_TOP_APP)) &&
 		(!strcmp(task->comm, "BackgroundExecu") ||
 		 !strcmp(task->comm, "launcher-loader") ||
 		 ax_sched_comm_has_prefix(task->comm, "LauncherBg",
