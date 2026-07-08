@@ -1,0 +1,246 @@
+on init
+    mkdir /dev/stune/ax_foreground
+    mkdir /dev/stune/audio-app
+    mkdir /dev/stune/restricted
+    mkdir /dev/stune/foreground_window
+    mkdir /dev/stune/system
+    mkdir /dev/stune/system-background
+    mkdir /dev/stune/dex2oat
+    mkdir /dev/stune/l-background
+    mkdir /dev/stune/h-background
+    mkdir /dev/stune/systemui
+    chown system system /dev/stune/ax_foreground
+    chown system system /dev/stune/audio-app
+    chown system system /dev/stune/restricted
+    chown system system /dev/stune/foreground_window
+    chown system system /dev/stune/system
+    chown system system /dev/stune/system-background
+    chown system system /dev/stune/dex2oat
+    chown system system /dev/stune/l-background
+    chown system system /dev/stune/h-background
+    chown system system /dev/stune/systemui
+    chown system system /dev/stune/ax_foreground/tasks
+    chown system system /dev/stune/audio-app/tasks
+    chown system system /dev/stune/restricted/tasks
+    chown system system /dev/stune/foreground_window/tasks
+    chown system system /dev/stune/system/tasks
+    chown system system /dev/stune/system-background/tasks
+    chown system system /dev/stune/dex2oat/tasks
+    chown system system /dev/stune/l-background/tasks
+    chown system system /dev/stune/h-background/tasks
+    chown system system /dev/stune/systemui/tasks
+    chown system system /dev/stune/ax_foreground/cgroup.procs
+    chown system system /dev/stune/audio-app/cgroup.procs
+    chown system system /dev/stune/restricted/cgroup.procs
+    chown system system /dev/stune/foreground_window/cgroup.procs
+    chown system system /dev/stune/system/cgroup.procs
+    chown system system /dev/stune/system-background/cgroup.procs
+    chown system system /dev/stune/dex2oat/cgroup.procs
+    chown system system /dev/stune/l-background/cgroup.procs
+    chown system system /dev/stune/h-background/cgroup.procs
+    chown system system /dev/stune/systemui/cgroup.procs
+    chmod 0664 /dev/stune/ax_foreground/tasks
+    chmod 0664 /dev/stune/audio-app/tasks
+    chmod 0664 /dev/stune/restricted/tasks
+    chmod 0664 /dev/stune/foreground_window/tasks
+    chmod 0664 /dev/stune/system/tasks
+    chmod 0664 /dev/stune/system-background/tasks
+    chmod 0664 /dev/stune/dex2oat/tasks
+    chmod 0664 /dev/stune/l-background/tasks
+    chmod 0664 /dev/stune/h-background/tasks
+    chmod 0664 /dev/stune/systemui/tasks
+    chmod 0664 /dev/stune/ax_foreground/cgroup.procs
+    chmod 0664 /dev/stune/audio-app/cgroup.procs
+    chmod 0664 /dev/stune/restricted/cgroup.procs
+    chmod 0664 /dev/stune/foreground_window/cgroup.procs
+    chmod 0664 /dev/stune/system/cgroup.procs
+    chmod 0664 /dev/stune/system-background/cgroup.procs
+    chmod 0664 /dev/stune/dex2oat/cgroup.procs
+    chmod 0664 /dev/stune/l-background/cgroup.procs
+    chmod 0664 /dev/stune/h-background/cgroup.procs
+    chmod 0664 /dev/stune/systemui/cgroup.procs
+
+    chmod 0755 /dev/cpuctl/cgroup.procs
+    chown system system /dev/cpuctl/foreground/cpu.uclamp.min
+    chown system system /dev/cpuctl/top-app/cpu.uclamp.min
+    chown system system /dev/cpuctl/foreground/cpu.uclamp.max
+    chown system system /dev/cpuctl/top-app/cpu.uclamp.max
+    chown system system /dev/cpuctl/foreground/cpu.uclamp.latency_sensitive
+    chown system system /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive
+    chmod 0664 /dev/cpuctl/foreground/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/top-app/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/foreground/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/top-app/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/foreground/cpu.uclamp.latency_sensitive
+    chmod 0664 /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive
+    write /dev/cpuctl/rt/cpu.shares 20480
+    write /dev/cpuctl/system/cpu.shares 20480
+    write /dev/cpuctl/foreground/cpu.shares 20480
+    write /dev/cpuctl/foreground_window/cpu.shares 20480
+    write /dev/cpuctl/foreground_window/cpu.uclamp.min 40
+    write /dev/cpuctl/foreground_window/cpu.uclamp.latency_sensitive 1
+    write /dev/cpuctl/top-app/cpu.shares 20480
+    write /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 1
+    write /dev/cpuctl/background/cpu.shares 1024
+    write /dev/cpuctl/system-background/cpu.shares 1024
+    write /dev/cpuctl/dex2oat/cpu.shares 512
+    write /dev/cpuctl/nnapi-hal/cpu.shares 20480
+    write /dev/cpuctl/camera-daemon/cpu.shares 20480
+
+    mkdir /dev/cpuctl/ax_foreground
+    chown system system /dev/cpuctl/ax_foreground
+    chown system system /dev/cpuctl/ax_foreground/tasks
+    chown system system /dev/cpuctl/ax_foreground/cgroup.procs
+    chown system system /dev/cpuctl/ax_foreground/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/ax_foreground/tasks
+    chmod 0664 /dev/cpuctl/ax_foreground/cgroup.procs
+    chmod 0664 /dev/cpuctl/ax_foreground/cpu.uclamp.max
+    write /dev/cpuctl/ax_foreground/cpu.shares 20480
+    write /dev/cpuctl/ax_foreground/cpu.uclamp.max max
+
+    mkdir /dev/cpuset/dex2oat
+    copy /dev/cpuset/cpus /dev/cpuset/dex2oat/cpus
+    copy /dev/cpuset/mems /dev/cpuset/dex2oat/mems
+    chown system system /dev/cpuset/dex2oat
+    chown system system /dev/cpuset/dex2oat/tasks
+    chown system system /dev/cpuset/dex2oat/cgroup.procs
+    chown system system /dev/cpuset/dex2oat/cpus
+    chmod 0775 /dev/cpuset/dex2oat
+    chmod 0775 /dev/cpuset/dex2oat/cgroup.procs
+    chmod 0775 /dev/cpuset/dex2oat/cpus
+    chmod 0775 /dev/cpuset/dex2oat/tasks
+
+    mkdir /dev/cpuset/systemui
+    copy /dev/cpuset/cpus /dev/cpuset/systemui/cpus
+    copy /dev/cpuset/mems /dev/cpuset/systemui/mems
+    chown system system /dev/cpuset/systemui
+    chown system system /dev/cpuset/systemui/tasks
+    chown system system /dev/cpuset/systemui/cgroup.procs
+    chown system system /dev/cpuset/systemui/cpus
+    chmod 0775 /dev/cpuset/systemui
+    chmod 0775 /dev/cpuset/systemui/cgroup.procs
+    chmod 0775 /dev/cpuset/systemui/cpus
+    chmod 0775 /dev/cpuset/systemui/tasks
+
+    mkdir /dev/cpuset/audio-app
+    copy /dev/cpuset/cpus /dev/cpuset/audio-app/cpus
+    copy /dev/cpuset/mems /dev/cpuset/audio-app/mems
+    chown system system /dev/cpuset/audio-app
+    chown system system /dev/cpuset/audio-app/tasks
+    chown system system /dev/cpuset/audio-app/cgroup.procs
+    chown system system /dev/cpuset/audio-app/cpus
+    chmod 0775 /dev/cpuset/audio-app
+    chmod 0775 /dev/cpuset/audio-app/cgroup.procs
+    chmod 0775 /dev/cpuset/audio-app/cpus
+    chmod 0775 /dev/cpuset/audio-app/tasks
+
+    mkdir /dev/cpuctl/audio-app
+    chown system system /dev/cpuctl/audio-app
+    chown system system /dev/cpuctl/audio-app/tasks
+    chown system system /dev/cpuctl/audio-app/cgroup.procs
+    chown system system /dev/cpuctl/audio-app/cpu.uclamp.latency_sensitive
+    chown system system /dev/cpuctl/audio-app/cpu.uclamp.max
+    chown system system /dev/cpuctl/audio-app/cpu.uclamp.min
+    chmod 0775 /dev/cpuctl/audio-app/tasks
+    chmod 0775 /dev/cpuctl/audio-app/cgroup.procs
+    chmod 0775 /dev/cpuctl/audio-app/cpu.uclamp.latency_sensitive
+    chmod 0775 /dev/cpuctl/audio-app/cpu.uclamp.max
+    chmod 0775 /dev/cpuctl/audio-app/cpu.uclamp.min
+    write /dev/cpuctl/audio-app/cpu.shares 20480
+
+    mkdir /dev/cpuctl/restricted
+    chown system system /dev/cpuctl/restricted
+    chown system system /dev/cpuctl/restricted/tasks
+    chown system system /dev/cpuctl/restricted/cgroup.procs
+    chown system system /dev/cpuctl/restricted/cpu.uclamp.latency_sensitive
+    chown system system /dev/cpuctl/restricted/cpu.uclamp.max
+    chown system system /dev/cpuctl/restricted/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/restricted/tasks
+    chmod 0664 /dev/cpuctl/restricted/cgroup.procs
+    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.latency_sensitive
+    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.min
+    write /dev/cpuctl/restricted/cpu.shares 256
+
+    mkdir /dev/cpuctl/l-background
+    chown system system /dev/cpuctl/l-background
+    chown system system /dev/cpuctl/l-background/tasks
+    chown system system /dev/cpuctl/l-background/cgroup.procs
+    chown system system /dev/cpuctl/l-background/cpu.shares
+    chown system system /dev/cpuctl/l-background/cpu.uclamp.min
+    chown system system /dev/cpuctl/l-background/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/l-background/tasks
+    chmod 0664 /dev/cpuctl/l-background/cgroup.procs
+    chmod 0664 /dev/cpuctl/l-background/cpu.shares
+    chmod 0664 /dev/cpuctl/l-background/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/l-background/cpu.uclamp.max
+    write /dev/cpuctl/l-background/cpu.shares 64
+    write /dev/cpuctl/l-background/cpu.uclamp.max 25
+    write /dev/cpuctl/l-background/cpu.uclamp.min 0
+
+    mkdir /dev/cpuctl/h-background
+    chown system system /dev/cpuctl/h-background
+    chown system system /dev/cpuctl/h-background/tasks
+    chown system system /dev/cpuctl/h-background/cgroup.procs
+    chown system system /dev/cpuctl/h-background/cpu.shares
+    chown system system /dev/cpuctl/h-background/cpu.uclamp.min
+    chown system system /dev/cpuctl/h-background/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/h-background/tasks
+    chmod 0664 /dev/cpuctl/h-background/cgroup.procs
+    chmod 0664 /dev/cpuctl/h-background/cpu.shares
+    chmod 0664 /dev/cpuctl/h-background/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/h-background/cpu.uclamp.max
+    write /dev/cpuctl/h-background/cpu.shares 256
+    write /dev/cpuctl/h-background/cpu.uclamp.max 50
+    write /dev/cpuctl/h-background/cpu.uclamp.min 0
+
+    mkdir /dev/cpuctl/systemui
+    chown system system /dev/cpuctl/systemui
+    chown system system /dev/cpuctl/systemui/tasks
+    chown system system /dev/cpuctl/systemui/cgroup.procs
+    chown system system /dev/cpuctl/systemui/cpu.shares
+    chown system system /dev/cpuctl/systemui/cpu.uclamp.min
+    chown system system /dev/cpuctl/systemui/cpu.uclamp.max
+    chown system system /dev/cpuctl/systemui/cpu.uclamp.latency_sensitive
+    chmod 0664 /dev/cpuctl/systemui/tasks
+    chmod 0664 /dev/cpuctl/systemui/cgroup.procs
+    chmod 0664 /dev/cpuctl/systemui/cpu.shares
+    chmod 0664 /dev/cpuctl/systemui/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/systemui/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/systemui/cpu.uclamp.latency_sensitive
+    write /dev/cpuctl/systemui/cpu.shares 20480
+    write /dev/cpuctl/systemui/cpu.uclamp.max 100
+    write /dev/cpuctl/systemui/cpu.uclamp.min 40
+    write /dev/cpuctl/systemui/cpu.uclamp.latency_sensitive 1
+
+    write /dev/stune/systemui/schedtune.boost 40
+    write /dev/stune/systemui/schedtune.prefer_idle 1
+
+    chown system system /dev/cpuctl/top-app
+    chown system system /dev/cpuctl/top-app/tasks
+    chown system system /dev/cpuctl/top-app/cgroup.procs
+    chown system system /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive
+    chown system system /dev/cpuctl/top-app/cpu.uclamp.max
+    chown system system /dev/cpuctl/top-app/cpu.uclamp.min
+    chmod 0775 /dev/cpuctl/top-app/tasks
+    chmod 0775 /dev/cpuctl/top-app/cgroup.procs
+    chmod 0775 /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive
+    chmod 0775 /dev/cpuctl/top-app/cpu.uclamp.max
+    chmod 0775 /dev/cpuctl/top-app/cpu.uclamp.min
+
+    mkdir /dev/blkio/l-background
+    mkdir /dev/blkio/h-background
+    chown system system /dev/blkio/l-background
+    chown system system /dev/blkio/h-background
+    chown system system /dev/blkio/l-background/tasks
+    chown system system /dev/blkio/h-background/tasks
+    chown system system /dev/blkio/l-background/cgroup.procs
+    chown system system /dev/blkio/h-background/cgroup.procs
+    chmod 0664 /dev/blkio/l-background/tasks
+    chmod 0664 /dev/blkio/h-background/tasks
+    chmod 0664 /dev/blkio/l-background/cgroup.procs
+    chmod 0664 /dev/blkio/h-background/cgroup.procs
+    write /dev/blkio/l-background/blkio.weight 800
+    write /dev/blkio/h-background/blkio.weight 1000
+    write /dev/blkio/l-background/blkio.group_idle 0
+    write /dev/blkio/h-background/blkio.group_idle 0
