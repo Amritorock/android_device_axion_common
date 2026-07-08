@@ -15,6 +15,7 @@ axion_boost := $(filter y,$(AXION_KERNEL_MODULES_AX_BOOST))
 axion_atcm := $(filter y,$(AXION_KERNEL_MODULES_ATCM))
 axion_burst_sched := $(axion_sched_rq)
 axion_frame_boost := $(axion_sched_rq)
+axion_game_boost := $(and $(axion_sched_rq),$(filter y,$(AXION_KERNEL_MODULES_GAME_BOOST)))
 axion_burst_svp := $(and $(axion_burst_sched),\
 	$(filter y,$(AXION_KERNEL_MODULES_SCHED_NOCHECK)))
 axion_thread_snooper := $(axion_task_tracepoints)

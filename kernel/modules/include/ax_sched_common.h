@@ -26,6 +26,8 @@
 #define AX_SCHED_ANDROID_UI "android.ui"
 #define AX_SCHED_POWER_MANAGER "PowerManagerSer"
 #define AX_SCHED_PHOTONIC_MODULATOR "PhotonicModulat"
+#define AX_SCHED_SHELL_SPLASHSCREEN "ll.splashscreen"
+#define AX_SCHED_LAUNCHER_UI_HELPER "UiThreadHelper"
 #define AX_SCHED_HWC_RELEASE "HWC release"
 #define AX_SCHED_GPU_COMPLETION "GPU completion"
 #define AX_SCHED_ALLOCATE_BUFFERS "allocateBuffers"
@@ -58,10 +60,16 @@
 #define AX_BOOST_SOURCE_REMOTE 4
 #define AX_BOOST_SOURCE_BINDER 5
 #define AX_BOOST_SOURCE_MANUAL 6
+#define AX_BOOST_SOURCE_GAME 7
 #define AX_BOOST_SOURCE_BURST_BASE 16
 #define AX_BOOST_SOURCE_BURST_MAX \
 	(AX_BOOST_SOURCE_BURST_BASE + 15)
 #define AX_BOOST_SOURCE_MAX AX_BOOST_SOURCE_BURST_MAX
+
+#define AX_GAME_BOOST_PROFILE_SUSTAINED 1
+#define AX_GAME_BOOST_PROFILE_RENDER 2
+#define AX_GAME_BOOST_PROFILE_LOADING 3
+#define AX_GAME_BOOST_PROFILE_CPU 4
 
 #define AX_BOOST_LEVEL_LIGHT 1
 #define AX_BOOST_LEVEL_HEAVY 2
@@ -82,6 +90,7 @@ static inline bool ax_sched_comm_matches_render_helper(const char *comm)
 		!strcmp(comm, AX_SCHED_HWC_RELEASE) ||
 		!strcmp(comm, AX_SCHED_GPU_COMPLETION) ||
 		!strcmp(comm, AX_SCHED_ALLOCATE_BUFFERS) ||
+		!strcmp(comm, AX_SCHED_SHELL_SPLASHSCREEN) ||
 		ax_sched_comm_has_prefix(comm, AX_SCHED_CHROME_IO_THREAD,
 					 sizeof(AX_SCHED_CHROME_IO_THREAD) - 1) ||
 		ax_sched_comm_has_prefix(comm, AX_SCHED_CHROME_CHILD_IO,
@@ -113,6 +122,7 @@ static inline unsigned int ax_sched_clamp_util(unsigned int util)
 enum ax_sched_pick_prio {
 	AX_SCHED_PRIO_NONE = 0,
 	AX_SCHED_PRIO_BURST = 10,
+	AX_SCHED_PRIO_GAME = 15,
 	AX_SCHED_PRIO_SVP = 20,
 	AX_SCHED_PRIO_FRAME = 30,
 };
@@ -148,6 +158,19 @@ unsigned int ax_burst_sched_task_util(struct task_struct *task);
 unsigned int ax_burst_sched_binder_util(struct task_struct *task);
 void ax_burst_sched_note_binder_assist(struct task_struct *task,
 				       unsigned int util_min);
+unsigned int ax_game_boost_active_util(void);
+unsigned int ax_game_boost_task_util(struct task_struct *task);
+bool ax_game_boost_pick_task_rq(struct task_struct *task,
+				       struct ax_sched_cpu_pick *pick);
+bool ax_game_boost_pick_fallback_rq(int prev_cpu, struct task_struct *task,
+					   struct ax_sched_cpu_pick *pick);
+bool ax_game_boost_pick_lowest_rq(struct task_struct *task,
+					 struct cpumask *local_cpu_mask,
+					 struct ax_sched_cpu_pick *pick);
+void ax_game_boost_update(pid_t pid, unsigned int profile,
+			  unsigned int level, unsigned int duration_ms, bool sticky,
+			  int tid_count, const pid_t *tids);
+void ax_game_boost_clear(pid_t pid);
 unsigned int ax_frame_boost_active_util(void);
 unsigned int ax_frame_boost_task_util(struct task_struct *task);
 bool ax_frame_boost_pick_task_rq(struct task_struct *task,

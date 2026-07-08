@@ -65,7 +65,8 @@
 #define AX_BS_SOURCE_POWER_LAUNCH 11
 #define AX_BS_SOURCE_POWER_RENDER 12
 #define AX_BS_SOURCE_GAME_LOADING 13
-#define AX_BS_SOURCE_MAX AX_BS_SOURCE_GAME_LOADING
+#define AX_BS_SOURCE_GAME 14
+#define AX_BS_SOURCE_MAX AX_BS_SOURCE_GAME
 #define AX_BS_SEVERITY_LIGHT 1
 #define AX_BS_SEVERITY_HEAVY 2
 #define AX_BS_SEVERITY_MAX AX_BS_SEVERITY_HEAVY
@@ -243,6 +244,7 @@ static struct ax_bs_target ax_bs_targets[AX_BS_MAX_TARGETS];
 static struct ax_bs_lock_target ax_bs_lock_targets[AX_BS_MAX_LOCK_TARGETS];
 #endif
 static unsigned int ax_bs_cpu_score[NR_CPUS];
+static unsigned int ax_bs_cpu_capacity[NR_CPUS];
 static atomic_t ax_bs_cpu_pressure[NR_CPUS];
 static unsigned long ax_bs_cpu_pressure_jiffies[NR_CPUS];
 static atomic64_t ax_bs_session_updates;
@@ -328,6 +330,9 @@ static unsigned int ax_bs_resource_mask(int mode, int source, int severity)
 		case AX_BS_SOURCE_ADPF_GPU:
 		case AX_BS_SOURCE_POWER_RENDER:
 			return AX_BOOST_GPU | AX_BOOST_MEMLAT;
+		case AX_BS_SOURCE_GAME:
+			return AX_BOOST_GPU | AX_BOOST_MEMLAT |
+				AX_BOOST_DDR | AX_BOOST_L3;
 		case AX_BS_SOURCE_POWER_LAUNCH:
 		case AX_BS_SOURCE_GAME_LOADING:
 			return AX_BOOST_PMQOS | AX_BOOST_GPU |
@@ -351,6 +356,41 @@ static unsigned int ax_bs_resource_mask(int mode, int source, int severity)
 
 	return resources;
 }
+
+#if defined(AX_BS_HAS_GAME_BOOST)
+static unsigned int ax_bs_game_profile(int mode, int source)
+{
+	if (mode != AX_BS_MODE_PERF)
+		return 0;
+
+	switch (source) {
+	case AX_BS_SOURCE_ADPF_CPU:
+		return AX_GAME_BOOST_PROFILE_CPU;
+	case AX_BS_SOURCE_ADPF_GPU:
+	case AX_BS_SOURCE_POWER_RENDER:
+		return AX_GAME_BOOST_PROFILE_RENDER;
+	case AX_BS_SOURCE_POWER_LAUNCH:
+	case AX_BS_SOURCE_GAME_LOADING:
+		return AX_GAME_BOOST_PROFILE_LOADING;
+	case AX_BS_SOURCE_GAME:
+		return AX_GAME_BOOST_PROFILE_SUSTAINED;
+	default:
+		return 0;
+	}
+}
+
+static void ax_bs_update_game_boost(pid_t pid, int mode, int source,
+				    int severity, unsigned int duration_ms,
+				    bool sticky, int tid_count, pid_t *tids)
+{
+	unsigned int profile = ax_bs_game_profile(mode, source);
+
+	if (!profile)
+		return;
+
+	ax_game_boost_update(pid, profile, severity, duration_ms, sticky, tid_count, tids);
+}
+#endif
 
 static bool ax_bs_pid_alive(struct pid *pid)
 {
@@ -761,8 +801,12 @@ static void ax_bs_cleanup_work_fn(struct work_struct *work)
 	delay = ax_bs_next_delay_locked();
 	raw_spin_unlock_irqrestore(&ax_bs_lock, flags);
 
-	for (i = 0; i < pid_count; i++)
+	for (i = 0; i < pid_count; i++) {
 		ax_sched_thread_snooper_track(pids[i], false);
+#if defined(AX_BS_HAS_GAME_BOOST)
+		ax_game_boost_clear(pids[i]);
+#endif
+	}
 	for (i = 0; i < source_count; i++)
 		ax_sched_boost_clear(sources[i]);
 	ax_bs_schedule_cleanup(delay);
@@ -837,6 +881,9 @@ static unsigned long ax_bs_active_scene_util(void)
 				     READ_ONCE(ax_bs_lock_targets[i].util));
 	}
 #endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	util = max_t(unsigned long, util, ax_game_boost_active_util());
+#endif
 
 	return util;
 }
@@ -909,6 +956,11 @@ static bool ax_bs_task_is_top_app_important(struct task_struct *task)
 	return prio < MAX_PRIO && task->prio <= prio;
 }
 
+static bool ax_bs_task_is_launcher_ui_helper(struct task_struct *task)
+{
+	return task && !strcmp(task->comm, AX_SCHED_LAUNCHER_UI_HELPER);
+}
+
 static bool ax_bs_target_matches(struct ax_bs_target *target,
 					 struct task_struct *task)
 {
@@ -938,6 +990,11 @@ static bool ax_bs_target_matches(struct ax_bs_target *target,
 	if (READ_ONCE(target->mode) == AX_BS_MODE_TOP_APP &&
 	    READ_ONCE(target->role) == AX_BS_ROLE_TOP_APP &&
 	    ax_bs_task_is_top_app_important(task))
+		return true;
+
+	if (READ_ONCE(target->mode) == AX_BS_MODE_LAUNCH &&
+	    READ_ONCE(target->role) == AX_BS_ROLE_LAUNCHER &&
+	    ax_bs_task_is_launcher_ui_helper(task))
 		return true;
 
 	if (tid == pid)
@@ -1034,10 +1091,17 @@ static unsigned int ax_svp_task_util(struct task_struct *task);
 
 static unsigned int ax_bs_task_util(struct task_struct *task)
 {
-	return max_t(unsigned int,
+	unsigned int util;
+
+	util = max_t(unsigned int,
 		     ax_bs_target_util(ax_bs_match_target(task)),
 		     max_t(unsigned int, ax_bs_lock_task_util(task),
 			   ax_bs_support_task_util(task)));
+#if defined(AX_BS_HAS_GAME_BOOST)
+	util = max_t(unsigned int, util, ax_game_boost_task_util(task));
+#endif
+
+	return util;
 }
 
 static void ax_bs_note_wakeup(struct ax_bs_target *target)
@@ -1079,6 +1143,13 @@ static unsigned int ax_bs_get_cpu_score(int cpu)
 	return score ? score : cpu + 1;
 }
 
+static unsigned int ax_bs_get_cpu_capacity(int cpu)
+{
+	unsigned int capacity = READ_ONCE(ax_bs_cpu_capacity[cpu]);
+
+	return capacity ? capacity : SCHED_CAPACITY_SCALE;
+}
+
 static unsigned int ax_bs_cpu_pressure_score(int cpu)
 {
 	unsigned int pressure = atomic_read(&ax_bs_cpu_pressure[cpu]);
@@ -1116,6 +1187,7 @@ static void ax_bs_note_cpu_pick(int cpu)
 
 static void ax_bs_init_cpu_scores(void)
 {
+	unsigned int max_score = 0;
 	int cpu;
 
 	for_each_possible_cpu(cpu) {
@@ -1129,7 +1201,19 @@ static void ax_bs_init_cpu_scores(void)
 			cpufreq_cpu_put(policy);
 		}
 
-		WRITE_ONCE(ax_bs_cpu_score[cpu], score ? score : cpu + 1);
+		score = score ? score : cpu + 1;
+		WRITE_ONCE(ax_bs_cpu_score[cpu], score);
+		max_score = max_t(unsigned int, max_score, score);
+	}
+
+	for_each_possible_cpu(cpu) {
+		unsigned int capacity = SCHED_CAPACITY_SCALE;
+		unsigned int score = ax_bs_get_cpu_score(cpu);
+
+		if (max_score)
+			capacity = (unsigned int)((u64)score * SCHED_CAPACITY_SCALE /
+						  max_score);
+		WRITE_ONCE(ax_bs_cpu_capacity[cpu], max_t(unsigned int, capacity, 1));
 		atomic_set(&ax_bs_cpu_pressure[cpu], 0);
 		WRITE_ONCE(ax_bs_cpu_pressure_jiffies[cpu], 0);
 	}
@@ -1188,7 +1272,7 @@ static int ax_bs_fit_cpu(struct task_struct *task, unsigned int util)
 			fallback_cpu = cpu;
 		}
 
-		if (util && arch_scale_cpu_capacity(cpu) < util)
+		if (util && ax_bs_get_cpu_capacity(cpu) < util)
 			continue;
 
 		if (score < best_score ||
@@ -1323,6 +1407,9 @@ static unsigned int ax_bs_latency_task_util(struct task_struct *task)
 #endif
 #if defined(AX_BS_HAS_SVP_POLICY)
 	util = max_t(unsigned int, util, ax_svp_task_util(task));
+#endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	util = max_t(unsigned int, util, ax_game_boost_task_util(task));
 #endif
 
 	return util;
@@ -2392,6 +2479,9 @@ static unsigned int ax_bs_lock_waiter_util(struct task_struct *task)
 #if defined(AX_BS_HAS_SVP_POLICY)
 	util = max_t(unsigned int, util, ax_svp_task_util(task));
 #endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	util = max_t(unsigned int, util, ax_game_boost_task_util(task));
+#endif
 
 	return util;
 }
@@ -2695,6 +2785,10 @@ static void ax_bs_select_task_rq(void *unused, struct task_struct *task,
 	if (!ax_sched_has_cpu_pick(&pick))
 		ax_svp_pick_task_rq(task, &pick);
 #endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	if (!ax_sched_has_cpu_pick(&pick))
+		ax_game_boost_pick_task_rq(task, &pick);
+#endif
 	if (!ax_sched_has_cpu_pick(&pick))
 		ax_bs_pick_task_rq(task, &pick);
 	if (!ax_sched_has_cpu_pick(&pick))
@@ -2724,6 +2818,10 @@ static void ax_bs_select_fallback_rq(void *unused, int prev_cpu,
 	if (!ax_sched_has_cpu_pick(&pick))
 		ax_svp_pick_fallback_rq(prev_cpu, task, &pick);
 #endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	if (!ax_sched_has_cpu_pick(&pick))
+		ax_game_boost_pick_fallback_rq(prev_cpu, task, &pick);
+#endif
 	if (!ax_sched_has_cpu_pick(&pick))
 		ax_bs_pick_fallback_rq(prev_cpu, task, &pick);
 	if (!ax_sched_has_cpu_pick(&pick))
@@ -2735,7 +2833,7 @@ static void ax_bs_select_fallback_rq(void *unused, int prev_cpu,
 		*new_cpu = pick.cpu;
 }
 
-#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY)
+#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY) || defined(AX_BS_HAS_GAME_BOOST)
 static void ax_bs_find_lowest_rq(void *unused, struct task_struct *task,
 				 struct cpumask *local_cpu_mask,
 				 int *lowest_cpu)
@@ -2754,6 +2852,10 @@ static void ax_bs_find_lowest_rq(void *unused, struct task_struct *task,
 #if defined(AX_BS_HAS_SVP_POLICY)
 	if (!ax_sched_has_cpu_pick(&pick))
 		ax_svp_pick_lowest_rq(task, local_cpu_mask, &pick);
+#endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	if (!ax_sched_has_cpu_pick(&pick))
+		ax_game_boost_pick_lowest_rq(task, local_cpu_mask, &pick);
 #endif
 
 	if (ax_sched_has_cpu_pick(&pick))
@@ -2796,6 +2898,7 @@ static void ax_bs_can_migrate_task(void *unused, struct task_struct *task,
 {
 	struct ax_bs_target *target;
 	unsigned int lock_util;
+	unsigned int game_util = 0;
 	unsigned int support_util;
 	unsigned int target_util;
 	int src_cpu;
@@ -2824,7 +2927,10 @@ static void ax_bs_can_migrate_task(void *unused, struct task_struct *task,
 	target_util = ax_bs_target_util(target);
 	lock_util = ax_bs_lock_task_util(task);
 	support_util = ax_bs_support_task_util(task);
-	if (!target_util && !lock_util && !support_util)
+#if defined(AX_BS_HAS_GAME_BOOST)
+	game_util = ax_game_boost_task_util(task);
+#endif
+	if (!target_util && !lock_util && !support_util && !game_util)
 		return;
 
 	if (!cpumask_test_cpu(dst_cpu, task->cpus_ptr)) {
@@ -2833,7 +2939,8 @@ static void ax_bs_can_migrate_task(void *unused, struct task_struct *task,
 	}
 
 	if (ax_bs_get_cpu_score(dst_cpu) < ax_bs_get_cpu_score(src_cpu)) {
-		if (target_util && !lock_util && !ax_bs_should_hold_migration(target)) {
+		if (target_util && !lock_util && !game_util &&
+		    !ax_bs_should_hold_migration(target)) {
 			atomic64_inc(&ax_bs_migration_releases);
 			return;
 		}
@@ -2900,6 +3007,7 @@ static void ax_bs_uclamp_eff_get(void *unused, struct task_struct *task,
 				 struct uclamp_se *uclamp_eff, int *ret)
 {
 	unsigned int lock_util;
+	unsigned int game_util = 0;
 	unsigned int support_util;
 	unsigned int util;
 
@@ -2923,8 +3031,12 @@ static void ax_bs_uclamp_eff_get(void *unused, struct task_struct *task,
 	util = ax_bs_target_util(ax_bs_match_target(task));
 	lock_util = ax_bs_lock_task_util(task);
 	support_util = ax_bs_support_task_util(task);
+#if defined(AX_BS_HAS_GAME_BOOST)
+	game_util = ax_game_boost_task_util(task);
+#endif
 	util = max_t(unsigned int, util, lock_util);
 	util = max_t(unsigned int, util, support_util);
+	util = max_t(unsigned int, util, game_util);
 	if (!util)
 		return;
 
@@ -3004,6 +3116,9 @@ static ssize_t ax_bs_scene_write(struct file *file, const char __user *buf,
 	unsigned int old_resource_source;
 	unsigned int resource_source;
 	pid_t clear_pids[AX_BS_MAX_TARGETS];
+#if defined(AX_BS_HAS_GAME_BOOST)
+	pid_t game_tids[AX_BS_MAX_TIDS];
+#endif
 	unsigned long flags;
 	unsigned long delay = 0;
 	unsigned long expire;
@@ -3018,6 +3133,9 @@ static ssize_t ax_bs_scene_write(struct file *file, const char __user *buf,
 	int role = AX_BS_ROLE_APP;
 	int parsed;
 	int requested_tids;
+#if defined(AX_BS_HAS_GAME_BOOST)
+	int game_tid_count = 0;
+#endif
 	int clear_source_count = 0;
 	int clear_pid_count = 0;
 	int i;
@@ -3054,7 +3172,10 @@ static ssize_t ax_bs_scene_write(struct file *file, const char __user *buf,
 	    !ax_bs_parse_int(argv[7 + requested_tids], &parsed))
 		role = parsed;
 	role = clamp(role, AX_BS_ROLE_APP, AX_BS_ROLE_MAX);
-	sticky = mode == AX_BS_MODE_TOP_APP && duration_ms == 0;
+	if (source <= 0)
+		source = mode;
+	sticky = (mode == AX_BS_MODE_TOP_APP ||
+		  source == AX_BS_SOURCE_GAME) && duration_ms == 0;
 
 	if (mode <= 0 || (!sticky && duration_ms == 0) || !READ_ONCE(ax_bs_enabled)) {
 		raw_spin_lock_irqsave(&ax_bs_lock, flags);
@@ -3062,13 +3183,21 @@ static ssize_t ax_bs_scene_write(struct file *file, const char __user *buf,
 				   clear_pids, &clear_pid_count);
 		delay = ax_bs_next_delay_locked();
 		raw_spin_unlock_irqrestore(&ax_bs_lock, flags);
-		for (i = 0; i < clear_pid_count; i++)
+		for (i = 0; i < clear_pid_count; i++) {
 			ax_sched_thread_snooper_track(clear_pids[i], false);
+#if defined(AX_BS_HAS_GAME_BOOST)
+			ax_game_boost_clear(clear_pids[i]);
+#endif
+		}
 		for (i = 0; i < clear_source_count; i++)
 			ax_sched_boost_clear(clear_sources[i]);
 		ax_bs_schedule_cleanup(delay);
 		if (!READ_ONCE(ax_bs_enabled))
 			ax_sched_boost_clear(0);
+#if defined(AX_BS_HAS_GAME_BOOST)
+		if (!READ_ONCE(ax_bs_enabled))
+			ax_game_boost_clear(0);
+#endif
 		return count;
 	}
 
@@ -3077,8 +3206,6 @@ static ssize_t ax_bs_scene_write(struct file *file, const char __user *buf,
 
 	if (mode > AX_BS_MODE_MAX)
 		mode = AX_BS_MODE_MAX;
-	if (source <= 0)
-		source = mode;
 	if (source > AX_BS_SOURCE_MAX)
 		source = AX_BS_SOURCE_MAX;
 	severity = clamp(severity, AX_BS_SEVERITY_LIGHT, AX_BS_SEVERITY_MAX);
@@ -3089,6 +3216,13 @@ static ssize_t ax_bs_scene_write(struct file *file, const char __user *buf,
 		severity = AX_BS_SEVERITY_LIGHT;
 		role = AX_BS_ROLE_TOP_APP;
 	}
+#if defined(AX_BS_HAS_GAME_BOOST)
+	for (i = 0; i < requested_tids && i + 7 < argc; i++) {
+		if (ax_bs_parse_int(argv[i + 7], &parsed) || parsed <= 0)
+			continue;
+		game_tids[game_tid_count++] = parsed;
+	}
+#endif
 
 	if (sticky) {
 		expire = 0;
@@ -3123,6 +3257,10 @@ static ssize_t ax_bs_scene_write(struct file *file, const char __user *buf,
 	ax_sched_boost(resource_source, severity,
 				ax_bs_resource_mask(mode, source, severity),
 				duration_ms);
+#if defined(AX_BS_HAS_GAME_BOOST)
+	ax_bs_update_game_boost(pid, mode, source, severity, duration_ms, sticky,
+				game_tid_count, game_tids);
+#endif
 	return count;
 }
 
@@ -3506,7 +3644,7 @@ static int __init ax_burst_sched_init(void)
 	if (ret)
 		goto unregister_select_rt;
 
-#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY)
+#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY) || defined(AX_BS_HAS_GAME_BOOST)
 	ret = register_trace_android_rvh_find_lowest_rq(ax_bs_find_lowest_rq,
 						       NULL);
 	if (ret)
@@ -3533,7 +3671,7 @@ unregister_dequeue:
 unregister_enqueue:
 	ax_sched_unregister_hook(android_rvh_enqueue_task, ax_bs_enqueue_task, NULL);
 unregister_find_lowest:
-#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY)
+#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY) || defined(AX_BS_HAS_GAME_BOOST)
 	ax_sched_unregister_hook(android_rvh_find_lowest_rq,
 				 ax_bs_find_lowest_rq, NULL);
 #endif
@@ -3599,7 +3737,7 @@ static void __exit ax_burst_sched_exit(void)
 				 ax_bs_can_migrate_task, NULL);
 	ax_sched_unregister_hook(android_rvh_dequeue_task, ax_bs_dequeue_task, NULL);
 	ax_sched_unregister_hook(android_rvh_enqueue_task, ax_bs_enqueue_task, NULL);
-#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY)
+#if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY) || defined(AX_BS_HAS_GAME_BOOST)
 	ax_sched_unregister_hook(android_rvh_find_lowest_rq,
 				 ax_bs_find_lowest_rq, NULL);
 #endif
@@ -3660,8 +3798,12 @@ static void __exit ax_burst_sched_exit(void)
 	for (i = 0; i < AX_BS_MAX_LOCK_TARGETS; i++)
 		ax_bs_release_pid(lock_pids[i]);
 #endif
-	for (i = 0; i < clear_pid_count; i++)
+	for (i = 0; i < clear_pid_count; i++) {
 		ax_sched_thread_snooper_track(clear_pids[i], false);
+#if defined(AX_BS_HAS_GAME_BOOST)
+		ax_game_boost_clear(clear_pids[i]);
+#endif
+	}
 	for (i = 0; i < clear_source_count; i++)
 		ax_sched_boost_clear(clear_sources[i]);
 

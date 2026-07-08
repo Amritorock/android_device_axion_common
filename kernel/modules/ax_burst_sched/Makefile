@@ -21,6 +21,10 @@ ifeq ($(axion_frame_boost),y)
 ccflags-y += -DAX_BS_HAS_FRAME_BOOST
 KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_frame_boost/Module.symvers))
 endif
+ifeq ($(axion_game_boost),y)
+ccflags-y += -DAX_BS_HAS_GAME_BOOST
+KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_game_boost/Module.symvers))
+endif
 ifeq ($(axion_burst_svp),y)
 ccflags-y += -DAX_BS_HAS_SVP_POLICY
 endif
