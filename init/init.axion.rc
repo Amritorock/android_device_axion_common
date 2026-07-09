@@ -98,6 +98,57 @@ on init
     write /dev/cpuctl/ax_foreground/cpu.shares 20480
     write /dev/cpuctl/ax_foreground/cpu.uclamp.max max
 
+    chown system system /dev/cpuset/foreground/cpus
+    chown system system /dev/cpuset/foreground_window/cpus
+    chown system system /dev/cpuset/background/cpus
+    chown system system /dev/cpuset/system-background/cpus
+    chown system system /dev/cpuset/restricted/cpus
+    chown system system /dev/cpuset/top-app/cpus
+    chown system system /dev/cpuset/camera-daemon/cpus
+    chmod 0664 /dev/cpuset/foreground/cpus
+    chmod 0664 /dev/cpuset/foreground_window/cpus
+    chmod 0664 /dev/cpuset/background/cpus
+    chmod 0664 /dev/cpuset/system-background/cpus
+    chmod 0664 /dev/cpuset/restricted/cpus
+    chmod 0664 /dev/cpuset/top-app/cpus
+    chmod 0664 /dev/cpuset/camera-daemon/cpus
+
+    mkdir /dev/cpuset/ax_foreground
+    copy /dev/cpuset/cpus /dev/cpuset/ax_foreground/cpus
+    copy /dev/cpuset/mems /dev/cpuset/ax_foreground/mems
+    chown system system /dev/cpuset/ax_foreground
+    chown system system /dev/cpuset/ax_foreground/tasks
+    chown system system /dev/cpuset/ax_foreground/cgroup.procs
+    chown system system /dev/cpuset/ax_foreground/cpus
+    chmod 0775 /dev/cpuset/ax_foreground
+    chmod 0775 /dev/cpuset/ax_foreground/cgroup.procs
+    chmod 0775 /dev/cpuset/ax_foreground/cpus
+    chmod 0775 /dev/cpuset/ax_foreground/tasks
+
+    mkdir /dev/cpuset/l-background
+    copy /dev/cpuset/cpus /dev/cpuset/l-background/cpus
+    copy /dev/cpuset/mems /dev/cpuset/l-background/mems
+    chown system system /dev/cpuset/l-background
+    chown system system /dev/cpuset/l-background/tasks
+    chown system system /dev/cpuset/l-background/cgroup.procs
+    chown system system /dev/cpuset/l-background/cpus
+    chmod 0775 /dev/cpuset/l-background
+    chmod 0775 /dev/cpuset/l-background/cgroup.procs
+    chmod 0775 /dev/cpuset/l-background/cpus
+    chmod 0775 /dev/cpuset/l-background/tasks
+
+    mkdir /dev/cpuset/h-background
+    copy /dev/cpuset/cpus /dev/cpuset/h-background/cpus
+    copy /dev/cpuset/mems /dev/cpuset/h-background/mems
+    chown system system /dev/cpuset/h-background
+    chown system system /dev/cpuset/h-background/tasks
+    chown system system /dev/cpuset/h-background/cgroup.procs
+    chown system system /dev/cpuset/h-background/cpus
+    chmod 0775 /dev/cpuset/h-background
+    chmod 0775 /dev/cpuset/h-background/cgroup.procs
+    chmod 0775 /dev/cpuset/h-background/cpus
+    chmod 0775 /dev/cpuset/h-background/tasks
+
     mkdir /dev/cpuset/dex2oat
     copy /dev/cpuset/cpus /dev/cpuset/dex2oat/cpus
     copy /dev/cpuset/mems /dev/cpuset/dex2oat/mems
