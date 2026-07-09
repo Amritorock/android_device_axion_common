@@ -37,11 +37,13 @@
 #define AX_SCHED_HWC_ASYNC_WORKER "HwcAsyncWorker"
 #define AX_SCHED_RE_COMPLETION "RE Completion"
 #define AX_SCHED_SF_BACKGROUND_EXEC "BckgrndExec"
+#define AX_SCHED_COMPOSER_SERVICE "composer-servic"
 #define AX_SCHED_CHROME_IO_THREAD "Chrome_IOThread"
 #define AX_SCHED_CHROME_CHILD_IO "Chrome_ChildIOT"
 #define AX_SCHED_CHROME_INPROC "Chrome_InProc"
 #define AX_SCHED_CHROME_RENDERER "CrRendererMain"
 #define AX_SCHED_CHROME_GPU "CrGpuMain"
+#define AX_SCHED_CHROME_THREAD_POOL "ThreadPoolForeg"
 #define AX_SCHED_COMPOSITOR "Compositor"
 #define AX_SCHED_VIZ_COMPOSITOR "VizCompositorTh"
 #define AX_SCHED_JNI_SURFACE "JNISurfaceTextu"
@@ -94,6 +96,7 @@ static inline bool ax_sched_comm_matches_render_helper(const char *comm)
 		!strcmp(comm, AX_SCHED_HWC_RELEASE) ||
 		!strcmp(comm, AX_SCHED_GPU_COMPLETION) ||
 		!strcmp(comm, AX_SCHED_ALLOCATE_BUFFERS) ||
+		!strcmp(comm, AX_SCHED_LAUNCHER_UI_HELPER) ||
 		!strcmp(comm, AX_SCHED_SHELL_SPLASHSCREEN) ||
 		ax_sched_comm_has_prefix(comm, AX_SCHED_CHROME_IO_THREAD,
 					 sizeof(AX_SCHED_CHROME_IO_THREAD) - 1) ||
