@@ -38,5 +38,8 @@
 
     <gpu
         node="/sys/devices/platform/1c500000.mali/devfreq/1c500000.mali"
+        currentNode="/sys/devices/platform/1c500000.mali/cur_freq"
+        usageNode="/sys/devices/platform/1c500000.mali/utilization"
+        frequencyMultiplier="1000"
         values="151000,302000,400000,471000,762000" />
 </kernel-manager>
