@@ -7,8 +7,10 @@
 
 #include <linux/atomic.h>
 #include <linux/bitops.h>
+#include <linux/cgroup.h>
 #include <linux/cpufreq.h>
 #include <linux/cpumask.h>
+#include <linux/fs.h>
 #include <linux/ioprio.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
@@ -25,14 +27,26 @@
 #include <linux/sched/topology.h>
 #include <linux/sched/types.h>
 #include <linux/seq_file.h>
+#include <linux/seqlock.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <uapi/linux/sched/types.h>
 #include <ax_sched_common.h>
 #include <trace/hooks/sched.h>
+#if defined(AX_BS_HAS_INPUT_HOOK)
+#include <linux/input.h>
+#include <trace/hooks/input.h>
+#endif
+#if defined(AX_BS_HAS_IOLIMIT_HOOK)
+#include <trace/hooks/fs.h>
+#endif
+#if defined(AX_BS_HAS_GPU_CONTEXT_HOOK)
+#include <trace/hooks/gpu.h>
+#endif
 #if defined(AX_BS_HAS_RWSEM_HOOK) && !defined(CONFIG_PREEMPT_RT)
 #include <trace/hooks/rwsem.h>
 #define AX_BS_HAS_LOCK_BOOST
@@ -89,6 +103,7 @@
 #define AX_BS_DEFAULT_TOP_ROLE_UTIL 864
 #define AX_BS_DEFAULT_SCENE_UTIL 896
 #define AX_BS_DEFAULT_SUPPORT_WORKER_UTIL 864
+#define AX_BS_DEFAULT_LAUNCH_WORKER_UTIL 864
 #define AX_BS_DEFAULT_UTIL_CAP 960
 #define AX_BS_DEFAULT_INITIAL_SCORE 160
 #define AX_BS_DEFAULT_SCORE_GAIN 40
@@ -96,7 +111,10 @@
 #define AX_BS_DEFAULT_SCORE_WINDOW_MS 32
 #define AX_BS_DEFAULT_MAX_DURATION_MS 3000
 #define AX_BS_DEFAULT_SPREAD_WINDOW_MS 12
+#define AX_BS_DEFAULT_SPILL_PRESSURE 2
 #define AX_BS_DEFAULT_MIGRATION_HOLD_MS 10
+#define AX_BS_DEFAULT_AUTO_TOP_APP_UTIL 800
+#define AX_BS_DEFAULT_AUTO_TOP_APP_HOLD_MS 64
 #define AX_BS_DEFAULT_TOP_APP_HOT_SCORE 160
 #define AX_BS_DEFAULT_TOP_APP_PRIO 119
 #define AX_BS_DEFAULT_SYSTEMUI_PREEMPTS_TOP_APP 1
@@ -104,6 +122,11 @@
 #define AX_BS_DEFAULT_IO_GUARD_PRIO 7
 #define AX_BS_DEFAULT_IO_GUARD_DURATION_MS 384
 #define AX_BS_DEFAULT_IO_GUARD_SCAN_MS 128
+#define AX_BS_DEFAULT_IO_LIMIT_DELAY_MS 0
+#define AX_BS_DEFAULT_IO_LIMIT_MIN_BYTES 4096
+#define AX_BS_DEFAULT_GPU_CONTEXT_BOOST_MS 384
+#define AX_BS_DEFAULT_DYNAMIC_SVP_MIN_RANK 60
+#define AX_BS_DEFAULT_DYNAMIC_SVP_MIN_DELTA 8
 #define AX_BS_MAX_IO_GUARDS 64
 #define AX_BS_MAX_LOCK_TARGETS 32
 #define AX_BS_DEFAULT_LOCK_UTIL 704
@@ -112,9 +135,22 @@
 #define AX_BS_CLEANUP_INTERVAL_MS 5000
 #define AX_BS_SCORE_MAX 255
 #define AX_BS_CPU_PRESSURE_MAX 8
+#define AX_BS_FIRST_APPLICATION_UID 10000
+#define AX_BS_RANK_BACKGROUND 10
+#define AX_BS_RANK_RECLAIM 20
+#define AX_BS_RANK_SUPPORT 60
+#define AX_BS_RANK_LOCK 68
+#define AX_BS_RANK_TOP_APP 70
+#define AX_BS_RANK_DISPLAY 72
+#define AX_BS_RANK_SYSTEM 78
+#define AX_BS_RANK_VISUAL 80
+#define AX_BS_RANK_LAUNCH 86
+#define AX_BS_RANK_FRAME 100
 
 struct ax_bs_target {
+	seqcount_t cpu_seq;
 	pid_t pid;
+	int cpu;
 	int uid;
 	int mode;
 	int source;
@@ -130,6 +166,22 @@ struct ax_bs_target {
 	atomic_t score;
 	atomic64_t wakeups;
 	atomic64_t hits;
+};
+
+struct ax_bs_auto_state {
+	unsigned long input_until;
+	unsigned long owner_until;
+	unsigned long max_until;
+	pid_t tgid;
+	int cpu;
+	bool systemui;
+};
+
+struct ax_bs_task_scene {
+	bool guard;
+	bool visual;
+	bool display_support;
+	bool offscreen;
 };
 
 #if defined(AX_BS_HAS_LOCK_BOOST)
@@ -185,6 +237,9 @@ module_param_named(scene_util, ax_bs_scene_util, uint, 0644);
 static unsigned int ax_bs_support_worker_util = AX_BS_DEFAULT_SUPPORT_WORKER_UTIL;
 module_param_named(support_worker_util, ax_bs_support_worker_util, uint, 0644);
 
+static unsigned int ax_bs_launch_worker_util = AX_BS_DEFAULT_LAUNCH_WORKER_UTIL;
+module_param_named(launch_worker_util, ax_bs_launch_worker_util, uint, 0644);
+
 static unsigned int ax_bs_util_cap = AX_BS_DEFAULT_UTIL_CAP;
 module_param_named(util_cap, ax_bs_util_cap, uint, 0644);
 
@@ -232,13 +287,39 @@ module_param_named(spread_active, ax_bs_spread_active, uint, 0644);
 static unsigned int ax_bs_spread_window_ms = AX_BS_DEFAULT_SPREAD_WINDOW_MS;
 module_param_named(spread_window_ms, ax_bs_spread_window_ms, uint, 0644);
 
+static unsigned int ax_bs_spill_pressure = AX_BS_DEFAULT_SPILL_PRESSURE;
+module_param_named(spill_pressure, ax_bs_spill_pressure, uint, 0644);
+
+static unsigned int ax_bs_auto_top_app = 1;
+module_param_named(auto_top_app, ax_bs_auto_top_app, uint, 0644);
+
+static unsigned int ax_bs_auto_top_app_util = AX_BS_DEFAULT_AUTO_TOP_APP_UTIL;
+module_param_named(auto_top_app_util, ax_bs_auto_top_app_util, uint, 0644);
+
+static unsigned int ax_bs_auto_top_app_hold_ms =
+	AX_BS_DEFAULT_AUTO_TOP_APP_HOLD_MS;
+module_param_named(auto_top_app_hold_ms, ax_bs_auto_top_app_hold_ms, uint,
+		   0644);
+
+#if defined(AX_BS_HAS_INPUT_HOOK)
+static unsigned int ax_bs_auto_top_app_max_ms = 800;
+module_param_named(auto_top_app_max_ms, ax_bs_auto_top_app_max_ms, uint, 0644);
+#endif
+
 static unsigned int ax_bs_reclaim_guard = 1;
 module_param_named(reclaim_guard, ax_bs_reclaim_guard, uint, 0644);
 
 static unsigned int ax_bs_background_guard = 1;
 module_param_named(background_guard, ax_bs_background_guard, uint, 0644);
 
+static unsigned int ax_bs_scene_focus = 1;
+module_param_named(scene_focus, ax_bs_scene_focus, uint, 0644);
+
+#if defined(AX_BS_HAS_IOPRIO)
 static unsigned int ax_bs_io_guard = 1;
+#else
+static unsigned int ax_bs_io_guard;
+#endif
 module_param_named(io_guard, ax_bs_io_guard, uint, 0644);
 
 static unsigned int ax_bs_io_guard_class = AX_BS_DEFAULT_IO_GUARD_CLASS;
@@ -252,6 +333,39 @@ module_param_named(io_guard_duration_ms, ax_bs_io_guard_duration_ms, uint, 0644)
 
 static unsigned int ax_bs_io_guard_scan_ms = AX_BS_DEFAULT_IO_GUARD_SCAN_MS;
 module_param_named(io_guard_scan_ms, ax_bs_io_guard_scan_ms, uint, 0644);
+
+#if defined(AX_BS_HAS_IOLIMIT_HOOK)
+static unsigned int ax_bs_io_limit_delay_ms = AX_BS_DEFAULT_IO_LIMIT_DELAY_MS;
+module_param_named(io_limit_delay_ms, ax_bs_io_limit_delay_ms, uint, 0644);
+
+static unsigned int ax_bs_io_limit_min_bytes = AX_BS_DEFAULT_IO_LIMIT_MIN_BYTES;
+module_param_named(io_limit_min_bytes, ax_bs_io_limit_min_bytes, uint, 0644);
+#endif
+
+#if defined(AX_BS_HAS_GPU_CONTEXT_HOOK)
+static unsigned int ax_bs_gpu_context_boost = 1;
+module_param_named(gpu_context_boost, ax_bs_gpu_context_boost, uint, 0644);
+
+static unsigned int ax_bs_gpu_context_boost_ms =
+	AX_BS_DEFAULT_GPU_CONTEXT_BOOST_MS;
+module_param_named(gpu_context_boost_ms, ax_bs_gpu_context_boost_ms, uint,
+		   0644);
+#endif
+
+#if defined(AX_BS_HAS_DYNAMIC_SVP_HOOK)
+static unsigned int ax_bs_dynamic_svp = 1;
+module_param_named(dynamic_svp, ax_bs_dynamic_svp, uint, 0644);
+
+static unsigned int ax_bs_dynamic_svp_min_rank =
+	AX_BS_DEFAULT_DYNAMIC_SVP_MIN_RANK;
+module_param_named(dynamic_svp_min_rank, ax_bs_dynamic_svp_min_rank, uint,
+		   0644);
+
+static unsigned int ax_bs_dynamic_svp_min_delta =
+	AX_BS_DEFAULT_DYNAMIC_SVP_MIN_DELTA;
+module_param_named(dynamic_svp_min_delta, ax_bs_dynamic_svp_min_delta, uint,
+		   0644);
+#endif
 
 #if defined(AX_BS_HAS_LOCK_BOOST)
 static unsigned int ax_bs_lock_boost = 1;
@@ -285,8 +399,18 @@ static struct ax_bs_lock_target ax_bs_lock_targets[AX_BS_MAX_LOCK_TARGETS];
 #endif
 static unsigned int ax_bs_cpu_score[NR_CPUS];
 static unsigned int ax_bs_cpu_capacity[NR_CPUS];
+static bool ax_bs_cpu_capacity_valid[NR_CPUS];
 static atomic_t ax_bs_cpu_pressure[NR_CPUS];
 static unsigned long ax_bs_cpu_pressure_jiffies[NR_CPUS];
+#if defined(AX_BS_HAS_INPUT_HOOK)
+static DEFINE_RAW_SPINLOCK(ax_bs_auto_lock);
+static seqcount_t ax_bs_auto_seq = SEQCNT_ZERO(ax_bs_auto_seq);
+static struct ax_bs_auto_state ax_bs_auto_state = {
+	.tgid = -1,
+	.cpu = AX_SCHED_CPU_NONE,
+};
+static bool ax_bs_input_hook_registered;
+#endif
 static atomic64_t ax_bs_session_updates;
 static atomic64_t ax_bs_session_clears;
 static atomic64_t ax_bs_session_prunes;
@@ -301,6 +425,22 @@ static atomic64_t ax_bs_binder_assists;
 static atomic64_t ax_bs_reclaim_assists;
 static atomic64_t ax_bs_support_worker_assists;
 static atomic64_t ax_bs_background_guard_assists;
+#if defined(AX_BS_HAS_DYNAMIC_SVP_HOOK)
+static atomic64_t ax_bs_dynamic_svp_preempts;
+static bool ax_bs_dynamic_svp_hook_registered;
+#endif
+#if defined(AX_BS_HAS_CPU_CAPACITY_HOOK)
+static bool ax_bs_cpu_capacity_hook_registered;
+static bool ax_bs_cpu_capacity_ready;
+#endif
+#if defined(AX_BS_HAS_IOLIMIT_HOOK)
+static atomic64_t ax_bs_io_limit_delays;
+static bool ax_bs_iolimit_hook_registered;
+#endif
+#if defined(AX_BS_HAS_GPU_CONTEXT_HOOK)
+static atomic64_t ax_bs_gpu_context_boosts;
+static bool ax_bs_gpu_context_hook_registered;
+#endif
 #if defined(AX_BS_HAS_LOCK_BOOST)
 static atomic_t ax_bs_lock_active_count;
 static atomic64_t ax_bs_lock_assists;
@@ -522,7 +662,10 @@ static struct pid *ax_bs_detach_target(struct ax_bs_target *target)
 {
 	struct pid *pid = READ_ONCE(target->pid_ref);
 
+	write_seqcount_begin(&target->cpu_seq);
 	WRITE_ONCE(target->pid, -1);
+	WRITE_ONCE(target->cpu, AX_SCHED_CPU_NONE);
+	write_seqcount_end(&target->cpu_seq);
 	WRITE_ONCE(target->uid, -1);
 	WRITE_ONCE(target->mode, 0);
 	WRITE_ONCE(target->source, 0);
@@ -642,8 +785,9 @@ static struct pid *ax_bs_set_target_locked(struct ax_bs_target *target, pid_t pi
 					   unsigned long expire_jiffies,
 					   bool sticky)
 {
-	bool preserve = ax_bs_target_active(target) &&
-		READ_ONCE(target->pid) == pid &&
+	bool same_pid = ax_bs_target_active(target) &&
+		READ_ONCE(target->pid) == pid;
+	bool preserve = same_pid &&
 		READ_ONCE(target->mode) == mode &&
 		READ_ONCE(target->source) == source &&
 		READ_ONCE(target->severity) == severity &&
@@ -655,6 +799,7 @@ static struct pid *ax_bs_set_target_locked(struct ax_bs_target *target, pid_t pi
 		ax_bs_clamp_score(READ_ONCE(ax_bs_initial_score));
 	s64 wakeups = preserve ? atomic64_read(&target->wakeups) : 0;
 	s64 hits = preserve ? atomic64_read(&target->hits) : 0;
+	int cpu = same_pid ? READ_ONCE(target->cpu) : AX_SCHED_CPU_NONE;
 	struct pid *old_pid = ax_bs_detach_target(target);
 	int parsed;
 	int i;
@@ -682,7 +827,10 @@ static struct pid *ax_bs_set_target_locked(struct ax_bs_target *target, pid_t pi
 	}
 	WRITE_ONCE(target->pid_ref, pid_ref);
 	smp_wmb();
+	write_seqcount_begin(&target->cpu_seq);
+	WRITE_ONCE(target->cpu, cpu);
 	WRITE_ONCE(target->pid, pid);
+	write_seqcount_end(&target->cpu_seq);
 	atomic64_inc(&ax_bs_session_updates);
 
 	return old_pid;
@@ -925,7 +1073,375 @@ static unsigned int ax_bs_target_util(struct ax_bs_target *target)
 	return min_t(unsigned int, base + score * (cap - base) / AX_BS_SCORE_MAX, cap);
 }
 
-static unsigned long ax_bs_active_scene_util(void)
+static unsigned int ax_bs_mode_rank(int mode)
+{
+	switch (mode) {
+	case AX_BS_MODE_LAUNCH:
+		return AX_BS_RANK_LAUNCH;
+	case AX_BS_MODE_ANIMATION:
+	case AX_BS_MODE_REMOTE:
+		return AX_BS_RANK_VISUAL;
+	case AX_BS_MODE_TOP_APP:
+		return AX_BS_RANK_TOP_APP;
+	case AX_BS_MODE_PERF:
+		return AX_BS_RANK_DISPLAY;
+	default:
+		return 0;
+	}
+}
+
+static unsigned int ax_bs_role_rank(int role)
+{
+	switch (role) {
+	case AX_BS_ROLE_SYSTEM_SERVER:
+		return AX_BS_RANK_SYSTEM;
+	case AX_BS_ROLE_SYSTEM_UI:
+	case AX_BS_ROLE_LAUNCHER:
+		return AX_BS_RANK_LAUNCH;
+	case AX_BS_ROLE_TOP_APP:
+		return AX_BS_RANK_VISUAL;
+	default:
+		return 0;
+	}
+}
+
+static unsigned int ax_bs_source_rank(int source)
+{
+	switch (source) {
+	case AX_BS_SOURCE_FRAME_RESCUE:
+		return AX_BS_RANK_FRAME;
+	case AX_BS_SOURCE_LAUNCH:
+	case AX_BS_SOURCE_POWER_LAUNCH:
+	case AX_BS_SOURCE_GAME_LOADING:
+	case AX_BS_SOURCE_TOP_APP_SWITCH:
+		return AX_BS_RANK_LAUNCH;
+	case AX_BS_SOURCE_ANIMATION:
+	case AX_BS_SOURCE_REMOTE:
+	case AX_BS_SOURCE_START_ACTIVITY_BINDER:
+		return AX_BS_RANK_VISUAL;
+	case AX_BS_SOURCE_POWER_RENDER:
+	case AX_BS_SOURCE_ADPF_GPU:
+	case AX_BS_SOURCE_GAME:
+		return AX_BS_RANK_DISPLAY;
+	case AX_BS_SOURCE_ADPF_CPU:
+	case AX_BS_SOURCE_POWER_INTERACTION:
+	case AX_BS_SOURCE_POWER_DISPLAY:
+		return AX_BS_RANK_TOP_APP;
+	default:
+		return 0;
+	}
+}
+
+static unsigned int ax_bs_target_rank(struct ax_bs_target *target)
+{
+	unsigned int rank;
+
+	if (!target || !READ_ONCE(ax_bs_enabled) || !ax_bs_target_active(target))
+		return 0;
+
+	rank = max_t(unsigned int, ax_bs_mode_rank(READ_ONCE(target->mode)),
+		     ax_bs_role_rank(READ_ONCE(target->role)));
+	rank = max_t(unsigned int, rank,
+		     ax_bs_source_rank(READ_ONCE(target->source)));
+	if (READ_ONCE(target->severity) >= AX_BS_SEVERITY_HEAVY)
+		rank = max_t(unsigned int, rank, AX_BS_RANK_LAUNCH);
+	if (ax_bs_target_score_active(target) &&
+	    atomic_read(&target->score) >=
+		    ax_bs_clamp_score(READ_ONCE(ax_bs_top_app_hot_score)))
+		rank = max_t(unsigned int, rank, AX_BS_RANK_VISUAL);
+
+	return min_t(unsigned int, rank, AX_BS_RANK_FRAME);
+}
+
+#if defined(AX_BS_HAS_INPUT_HOOK)
+static bool ax_bs_task_in_cpu_group(struct task_struct *task, const char *name)
+{
+#if defined(CONFIG_CGROUP_SCHED)
+	struct cgroup_subsys_state *css;
+	bool match = false;
+
+	if (!task || !name)
+		return false;
+
+	rcu_read_lock();
+	css = task_css(task, cpu_cgrp_id);
+	if (css && css->cgroup && css->cgroup->kn)
+		match = !strcmp(css->cgroup->kn->name, name);
+	rcu_read_unlock();
+
+	return match;
+#else
+	return false;
+#endif
+}
+#endif
+
+static bool ax_bs_task_is_primary_visual(struct task_struct *task)
+{
+	if (!task)
+		return false;
+
+	return task_pid_nr(task) == task_tgid_nr(task) ||
+		!strcmp(task->comm, AX_SCHED_RENDER_THREAD) ||
+		!strcmp(task->comm, AX_SCHED_ANDROID_UI) ||
+		!strcmp(task->comm, AX_SCHED_ANDROID_DISPLAY) ||
+		!strcmp(task->comm, AX_SCHED_ANDROID_ANIM) ||
+		!strcmp(task->comm, AX_SCHED_ANDROID_ANIM_LF);
+}
+
+#if defined(AX_BS_HAS_INPUT_HOOK)
+static void ax_bs_read_auto_state(struct ax_bs_auto_state *state)
+{
+	unsigned int seq;
+
+	do {
+		seq = read_seqcount_begin(&ax_bs_auto_seq);
+		state->input_until = READ_ONCE(ax_bs_auto_state.input_until);
+		state->owner_until = READ_ONCE(ax_bs_auto_state.owner_until);
+		state->max_until = READ_ONCE(ax_bs_auto_state.max_until);
+		state->tgid = READ_ONCE(ax_bs_auto_state.tgid);
+		state->cpu = READ_ONCE(ax_bs_auto_state.cpu);
+		state->systemui = READ_ONCE(ax_bs_auto_state.systemui);
+	} while (read_seqcount_retry(&ax_bs_auto_seq, seq));
+}
+
+static bool ax_bs_input_window_active(const struct ax_bs_auto_state *state)
+{
+	return READ_ONCE(ax_bs_input_hook_registered) &&
+		time_before(jiffies, state->input_until) &&
+		time_before(jiffies, state->max_until);
+}
+
+static bool ax_bs_auto_top_app_active(const struct ax_bs_auto_state *state)
+{
+	return READ_ONCE(ax_bs_input_hook_registered) &&
+		READ_ONCE(ax_bs_enabled) && READ_ONCE(ax_bs_auto_top_app) &&
+		time_before(jiffies, state->owner_until) &&
+		time_before(jiffies, state->max_until);
+}
+
+static void ax_bs_note_auto_top_app(struct task_struct *task)
+{
+	unsigned long flags;
+	unsigned long hold;
+	unsigned long expires;
+	unsigned long now;
+	unsigned int hold_ms;
+	struct ax_bs_auto_state state;
+	bool active;
+	bool input_active;
+	bool systemui;
+	pid_t owner;
+	pid_t tgid;
+
+	if (!READ_ONCE(ax_bs_enabled) || !READ_ONCE(ax_bs_auto_top_app) || !task)
+		return;
+
+	ax_bs_read_auto_state(&state);
+	active = ax_bs_auto_top_app_active(&state);
+	input_active = ax_bs_input_window_active(&state);
+	if (!input_active && !active)
+		return;
+	if (!ax_bs_task_is_primary_visual(task))
+		return;
+
+	tgid = task_tgid_nr(task);
+	if (tgid <= 0)
+		return;
+
+	if (active && state.tgid == tgid) {
+		systemui = state.systemui;
+		hold_ms = max_t(unsigned int,
+				READ_ONCE(ax_bs_auto_top_app_hold_ms), 1);
+		hold = max_t(unsigned long, msecs_to_jiffies(hold_ms), 1);
+		now = jiffies;
+		if (time_after(state.owner_until,
+			       now + max_t(unsigned long, hold / 2, 1)))
+			return;
+		expires = now + hold;
+		if (time_after(expires, state.max_until))
+			expires = state.max_until;
+		if (!time_after(expires, state.owner_until))
+			return;
+	} else {
+		if (active)
+			return;
+		systemui = ax_bs_task_in_cpu_group(task, "systemui");
+		if (__kuid_val(task_uid(task)) < AX_BS_FIRST_APPLICATION_UID &&
+		    !systemui)
+			return;
+		if (!systemui && !ax_bs_task_in_cpu_group(task, "top-app"))
+			return;
+	}
+
+	raw_spin_lock_irqsave(&ax_bs_auto_lock, flags);
+	state.input_until = READ_ONCE(ax_bs_auto_state.input_until);
+	state.owner_until = READ_ONCE(ax_bs_auto_state.owner_until);
+	state.max_until = READ_ONCE(ax_bs_auto_state.max_until);
+	state.tgid = READ_ONCE(ax_bs_auto_state.tgid);
+	state.cpu = READ_ONCE(ax_bs_auto_state.cpu);
+	state.systemui = READ_ONCE(ax_bs_auto_state.systemui);
+	active = ax_bs_auto_top_app_active(&state);
+	input_active = ax_bs_input_window_active(&state);
+	owner = state.tgid;
+	if (active && owner != tgid)
+		goto unlock;
+	else if (!active && !input_active)
+		goto unlock;
+	else if (active)
+		systemui = state.systemui;
+
+	hold_ms = max_t(unsigned int, READ_ONCE(ax_bs_auto_top_app_hold_ms), 1);
+	hold = max_t(unsigned long, msecs_to_jiffies(hold_ms), 1);
+	now = jiffies;
+	expires = now + hold;
+	if (time_after(expires, state.max_until))
+		expires = state.max_until;
+	if (!time_after(expires, now) ||
+	    (active && owner == tgid &&
+	     !time_after(expires, state.owner_until)))
+		goto unlock;
+
+	write_seqcount_begin(&ax_bs_auto_seq);
+	WRITE_ONCE(ax_bs_auto_state.tgid, tgid);
+	if (!active)
+		WRITE_ONCE(ax_bs_auto_state.cpu, AX_SCHED_CPU_NONE);
+	WRITE_ONCE(ax_bs_auto_state.systemui, systemui);
+	WRITE_ONCE(ax_bs_auto_state.owner_until, expires);
+	write_seqcount_end(&ax_bs_auto_seq);
+
+unlock:
+	raw_spin_unlock_irqrestore(&ax_bs_auto_lock, flags);
+}
+
+static void ax_bs_input_sync(void *unused, struct input_dev *dev)
+{
+	unsigned long flags;
+	unsigned long hold;
+	unsigned long max_hold;
+	unsigned long now;
+	unsigned int hold_ms;
+	unsigned int max_ms;
+	bool new_burst;
+
+	(void)unused;
+
+	if (!dev || !READ_ONCE(ax_bs_enabled) || !READ_ONCE(ax_bs_auto_top_app) ||
+	    !test_bit(EV_ABS, dev->evbit) ||
+	    !test_bit(ABS_MT_POSITION_X, dev->absbit) ||
+	    !test_bit(ABS_MT_POSITION_Y, dev->absbit))
+		return;
+
+	hold_ms = max_t(unsigned int, READ_ONCE(ax_bs_auto_top_app_hold_ms), 1);
+	max_ms = clamp_t(unsigned int, READ_ONCE(ax_bs_auto_top_app_max_ms),
+			 1, 2000);
+	hold = max_t(unsigned long, msecs_to_jiffies(hold_ms), 1);
+	max_hold = max_t(unsigned long, msecs_to_jiffies(max_ms), 1);
+	now = jiffies;
+	raw_spin_lock_irqsave(&ax_bs_auto_lock, flags);
+	new_burst = !time_before(now, READ_ONCE(ax_bs_auto_state.input_until));
+	write_seqcount_begin(&ax_bs_auto_seq);
+	WRITE_ONCE(ax_bs_auto_state.input_until, now + hold);
+	if (new_burst) {
+		WRITE_ONCE(ax_bs_auto_state.owner_until, 0);
+		WRITE_ONCE(ax_bs_auto_state.max_until, now + max_hold);
+		WRITE_ONCE(ax_bs_auto_state.tgid, -1);
+		WRITE_ONCE(ax_bs_auto_state.cpu, AX_SCHED_CPU_NONE);
+		WRITE_ONCE(ax_bs_auto_state.systemui, false);
+	}
+	write_seqcount_end(&ax_bs_auto_seq);
+	raw_spin_unlock_irqrestore(&ax_bs_auto_lock, flags);
+}
+#endif
+
+static bool ax_bs_read_active_auto_state(struct ax_bs_auto_state *state)
+{
+#if defined(AX_BS_HAS_INPUT_HOOK)
+	ax_bs_read_auto_state(state);
+	return ax_bs_auto_top_app_active(state);
+#else
+	(void)state;
+	return false;
+#endif
+}
+
+static unsigned int ax_bs_auto_target_util_for(
+		const struct ax_bs_auto_state *state)
+{
+	if (state->systemui)
+		return ax_sched_clamp_util(READ_ONCE(ax_bs_system_ui_util));
+
+	return ax_sched_clamp_util(READ_ONCE(ax_bs_auto_top_app_util));
+}
+
+static unsigned int ax_bs_auto_target_util(void)
+{
+	struct ax_bs_auto_state state;
+
+	if (!ax_bs_read_active_auto_state(&state))
+		return 0;
+	return ax_bs_auto_target_util_for(&state);
+}
+
+static bool ax_bs_auto_top_app_task_matches(
+		struct task_struct *task, const struct ax_bs_auto_state *state)
+{
+	return task && state->tgid == task_tgid_nr(task) &&
+		ax_bs_task_is_primary_visual(task);
+}
+
+static unsigned int ax_bs_auto_top_app_task_util(struct task_struct *task)
+{
+	struct ax_bs_auto_state state;
+
+	if (!ax_bs_read_active_auto_state(&state) ||
+	    !ax_bs_auto_top_app_task_matches(task, &state))
+		return 0;
+
+	return ax_bs_auto_target_util_for(&state);
+}
+
+static void ax_bs_note_auto_cpu(struct task_struct *task, int cpu)
+{
+#if defined(AX_BS_HAS_INPUT_HOOK)
+	unsigned long flags;
+	struct ax_bs_auto_state state;
+
+	if (cpu < 0 || cpu >= nr_cpu_ids || !ax_bs_read_active_auto_state(&state) ||
+	    state.cpu == cpu || !ax_bs_auto_top_app_task_matches(task, &state))
+		return;
+
+	raw_spin_lock_irqsave(&ax_bs_auto_lock, flags);
+	if (ax_bs_auto_top_app_active(&ax_bs_auto_state) &&
+	    READ_ONCE(ax_bs_auto_state.tgid) == task_tgid_nr(task) &&
+	    READ_ONCE(ax_bs_auto_state.cpu) != cpu) {
+		write_seqcount_begin(&ax_bs_auto_seq);
+		WRITE_ONCE(ax_bs_auto_state.cpu, cpu);
+		write_seqcount_end(&ax_bs_auto_seq);
+	}
+	raw_spin_unlock_irqrestore(&ax_bs_auto_lock, flags);
+#else
+	(void)task;
+	(void)cpu;
+#endif
+}
+
+static bool ax_bs_policy_matches_cpu(struct cpufreq_policy *policy, int cpu)
+{
+#if defined(AX_BS_MAP_UTIL_HAS_POLICY)
+	if (!policy)
+		return true;
+
+	return cpu >= 0 && cpu < nr_cpu_ids &&
+		cpumask_test_cpu(cpu, policy->related_cpus);
+#else
+	(void)policy;
+	(void)cpu;
+	return true;
+#endif
+}
+
+static unsigned long ax_bs_active_target_util(struct cpufreq_policy *policy)
 {
 	unsigned long util = 0;
 	int i;
@@ -934,10 +1450,25 @@ static unsigned long ax_bs_active_scene_util(void)
 		return 0;
 
 	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
-		if (READ_ONCE(ax_bs_targets[i].mode) == AX_BS_MODE_TOP_APP)
-			continue;
-		util = max_t(unsigned long, util,
-			     ax_bs_target_util(&ax_bs_targets[i]));
+		struct ax_bs_target *target = &ax_bs_targets[i];
+		unsigned int target_util;
+		unsigned int seq;
+		int cpu;
+
+		do {
+			seq = read_seqcount_begin(&target->cpu_seq);
+			if (READ_ONCE(target->mode) == AX_BS_MODE_TOP_APP) {
+				target_util = 0;
+			} else {
+				cpu = READ_ONCE(target->cpu);
+				if (ax_bs_policy_matches_cpu(policy, cpu))
+					target_util = ax_bs_target_util(target);
+				else
+					target_util = 0;
+			}
+		} while (read_seqcount_retry(&target->cpu_seq, seq));
+		if (target_util)
+			util = max_t(unsigned long, util, target_util);
 	}
 #if defined(AX_BS_HAS_LOCK_BOOST)
 	for (i = 0; i < AX_BS_MAX_LOCK_TARGETS; i++) {
@@ -951,6 +1482,12 @@ static unsigned long ax_bs_active_scene_util(void)
 #endif
 
 	return util;
+}
+
+static unsigned long ax_bs_active_scene_util(void)
+{
+	return max_t(unsigned long, ax_bs_active_target_util(NULL),
+		     ax_bs_auto_target_util());
 }
 
 static bool ax_bs_has_transient_scene(void)
@@ -1031,11 +1568,15 @@ static bool ax_bs_task_is_top_app_important(struct task_struct *task)
 
 static bool ax_bs_systemui_preempts_target(struct ax_bs_target *target)
 {
+	struct ax_bs_auto_state state;
+
 	if (!READ_ONCE(ax_bs_systemui_preempts_top_app))
 		return false;
-	if (READ_ONCE(target->mode) != AX_BS_MODE_TOP_APP ||
-	    READ_ONCE(target->role) != AX_BS_ROLE_TOP_APP)
+	if (READ_ONCE(target->role) != AX_BS_ROLE_TOP_APP ||
+	    READ_ONCE(target->mode) == AX_BS_MODE_LAUNCH)
 		return false;
+	if (ax_bs_read_active_auto_state(&state) && state.systemui)
+		return true;
 
 	return ax_bs_has_transient_role(AX_BS_ROLE_SYSTEM_UI);
 }
@@ -1086,24 +1627,79 @@ static bool ax_bs_target_matches(struct ax_bs_target *target,
 	return ax_sched_task_is_render_helper(task);
 }
 
-static struct ax_bs_target *ax_bs_match_target(struct task_struct *task)
+static unsigned int ax_bs_match_target_util(struct task_struct *task,
+					    struct ax_bs_target **match,
+					    unsigned int *match_rank)
 {
+	struct ax_bs_target *best = NULL;
+	unsigned int best_rank = 0;
+	unsigned int best_util = 0;
 	int i;
 
+	if (match)
+		*match = NULL;
+	if (match_rank)
+		*match_rank = 0;
 	if (!task || !READ_ONCE(ax_bs_enabled))
-		return NULL;
+		return 0;
 
 	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
 		struct ax_bs_target *target = &ax_bs_targets[i];
+		unsigned int seq;
+		unsigned int rank;
+		unsigned int util;
+		bool matches;
 
-		if (!ax_bs_target_active(target))
-			continue;
+		do {
+			seq = read_seqcount_begin(&target->cpu_seq);
+			matches = ax_bs_target_active(target) &&
+				ax_bs_target_matches(target, task);
+			if (matches) {
+				rank = ax_bs_target_rank(target);
+				util = ax_bs_target_util(target);
+			} else {
+				rank = 0;
+				util = 0;
+			}
+		} while (read_seqcount_retry(&target->cpu_seq, seq));
 
-		if (ax_bs_target_matches(target, task))
-			return target;
+		if (matches && (!best || rank > best_rank)) {
+			best = target;
+			best_rank = rank;
+			best_util = util;
+		}
 	}
 
-	return NULL;
+	if (match)
+		*match = best;
+	if (match_rank)
+		*match_rank = best_rank;
+	return best_util;
+}
+
+static void ax_bs_note_target_cpu(struct ax_bs_target *target,
+				  struct task_struct *task, int cpu)
+{
+	unsigned long flags;
+
+	if (!target || !task || cpu < 0 || cpu >= nr_cpu_ids)
+		return;
+
+	raw_spin_lock_irqsave(&ax_bs_lock, flags);
+	if (ax_bs_target_util(target) && ax_bs_target_matches(target, task)) {
+		write_seqcount_begin(&target->cpu_seq);
+		WRITE_ONCE(target->cpu, cpu);
+		write_seqcount_end(&target->cpu_seq);
+	}
+	raw_spin_unlock_irqrestore(&ax_bs_lock, flags);
+}
+
+static void ax_bs_note_matching_target_cpu(struct task_struct *task, int cpu)
+{
+	struct ax_bs_target *target;
+
+	ax_bs_match_target_util(task, &target, NULL);
+	ax_bs_note_target_cpu(target, task, cpu);
 }
 
 static bool ax_bs_task_has_role(struct task_struct *task, int role)
@@ -1168,6 +1764,10 @@ static unsigned int ax_bs_lock_task_util(struct task_struct *task)
 #endif
 
 static unsigned int ax_bs_support_task_util(struct task_struct *task);
+static bool ax_bs_task_is_launch_worker(struct task_struct *task);
+static bool ax_bs_target_is_launch_worker_scene(struct ax_bs_target *target);
+static unsigned int ax_bs_launch_worker_util_for(struct ax_bs_target *target);
+static unsigned int ax_bs_launch_worker_task_util(struct task_struct *task);
 #if defined(AX_BS_HAS_SVP_POLICY)
 static unsigned int ax_svp_task_util(struct task_struct *task);
 #endif
@@ -1177,9 +1777,11 @@ static unsigned int ax_bs_task_util(struct task_struct *task)
 	unsigned int util;
 
 	util = max_t(unsigned int,
-		     ax_bs_target_util(ax_bs_match_target(task)),
+		     ax_bs_match_target_util(task, NULL, NULL),
 		     max_t(unsigned int, ax_bs_lock_task_util(task),
 			   ax_bs_support_task_util(task)));
+	util = max_t(unsigned int, util, ax_bs_launch_worker_task_util(task));
+	util = max_t(unsigned int, util, ax_bs_auto_top_app_task_util(task));
 #if defined(AX_BS_HAS_GAME_BOOST)
 	util = max_t(unsigned int, util, ax_game_boost_task_util(task));
 #endif
@@ -1187,18 +1789,30 @@ static unsigned int ax_bs_task_util(struct task_struct *task)
 	return util;
 }
 
-static void ax_bs_note_wakeup(struct ax_bs_target *target)
+static bool ax_bs_note_wakeup(struct ax_bs_target *target,
+			      struct task_struct *task, bool launch_worker,
+			      bool hit)
 {
+	unsigned long flags;
 	unsigned long now = jiffies;
 	unsigned long last;
 	unsigned long delta_ms;
 	unsigned int score;
 	unsigned int gain;
 	unsigned int decay;
+	bool updated = false;
 
-	if (!target)
-		return;
+	if (!target || !task)
+		return false;
 
+	raw_spin_lock_irqsave(&ax_bs_lock, flags);
+	if (!ax_bs_target_util(target) ||
+	    (!ax_bs_target_matches(target, task) &&
+	     (!launch_worker ||
+	      READ_ONCE(target->pid) != task_tgid_nr(task) ||
+	      !ax_bs_task_is_launch_worker(task) ||
+	      !ax_bs_target_is_launch_worker_scene(target))))
+		goto unlock;
 	last = READ_ONCE(target->last_wake_jiffies);
 	score = ax_bs_clamp_score(atomic_read(&target->score));
 	gain = READ_ONCE(ax_bs_score_gain);
@@ -1217,6 +1831,13 @@ static void ax_bs_note_wakeup(struct ax_bs_target *target)
 	WRITE_ONCE(target->last_wake_jiffies, now);
 	atomic_set(&target->score, ax_bs_clamp_score(score));
 	atomic64_inc(&target->wakeups);
+	if (hit)
+		atomic64_inc(&target->hits);
+	updated = true;
+
+unlock:
+	raw_spin_unlock_irqrestore(&ax_bs_lock, flags);
+	return updated;
 }
 
 static unsigned int ax_bs_get_cpu_score(int cpu)
@@ -1297,12 +1918,138 @@ static void ax_bs_init_cpu_scores(void)
 			capacity = (unsigned int)((u64)score * SCHED_CAPACITY_SCALE /
 						  max_score);
 		WRITE_ONCE(ax_bs_cpu_capacity[cpu], max_t(unsigned int, capacity, 1));
+		WRITE_ONCE(ax_bs_cpu_capacity_valid[cpu], false);
 		atomic_set(&ax_bs_cpu_pressure[cpu], 0);
 		WRITE_ONCE(ax_bs_cpu_pressure_jiffies[cpu], 0);
 	}
 }
 
-static int ax_bs_best_cpu(struct task_struct *task)
+#if defined(AX_BS_HAS_CPU_CAPACITY_HOOK)
+static void ax_bs_update_cpu_capacity(void *unused, int cpu,
+				      unsigned long *capacity)
+{
+	bool ready = true;
+	unsigned int cpu_capacity;
+	unsigned int score;
+	int i;
+
+	(void)unused;
+
+	if (!capacity || cpu < 0 || cpu >= nr_cpu_ids)
+		return;
+
+	cpu_capacity = clamp_t(unsigned long, *capacity, 1, SCHED_CAPACITY_SCALE);
+	if (!READ_ONCE(ax_bs_cpu_capacity_valid[cpu]))
+		score = cpu_capacity;
+	else
+		score = max_t(unsigned int, READ_ONCE(ax_bs_cpu_score[cpu]),
+			      cpu_capacity);
+
+	WRITE_ONCE(ax_bs_cpu_score[cpu], score);
+	WRITE_ONCE(ax_bs_cpu_capacity[cpu], cpu_capacity);
+	WRITE_ONCE(ax_bs_cpu_capacity_valid[cpu], true);
+	if (READ_ONCE(ax_bs_cpu_capacity_ready))
+		return;
+
+	for_each_online_cpu(i) {
+		if (!READ_ONCE(ax_bs_cpu_capacity_valid[i])) {
+			ready = false;
+			break;
+		}
+	}
+	if (ready)
+		WRITE_ONCE(ax_bs_cpu_capacity_ready, true);
+}
+#endif
+
+static bool ax_bs_cpu_topology_ready(void)
+{
+#if defined(AX_BS_HAS_CPU_CAPACITY_HOOK)
+	return READ_ONCE(ax_bs_cpu_capacity_hook_registered) &&
+		READ_ONCE(ax_bs_cpu_capacity_ready);
+#else
+	return false;
+#endif
+}
+
+static int ax_bs_spread_cpu_mask(struct task_struct *task,
+				 const struct cpumask *cpu_mask, bool *spilled)
+{
+	unsigned int peak_pressure = ~0U;
+	unsigned int peak_score = 0;
+	unsigned int spill_pressure = ~0U;
+	unsigned int spill_score = 0;
+	unsigned int threshold;
+	int peak_cpu = AX_SCHED_CPU_NONE;
+	int spill_cpu = AX_SCHED_CPU_NONE;
+	int cpu;
+
+	if (spilled)
+		*spilled = false;
+	if (!task)
+		return AX_SCHED_CPU_NONE;
+
+	for_each_online_cpu(cpu) {
+		if (!cpumask_test_cpu(cpu, task->cpus_ptr))
+			continue;
+		if (cpu_mask && !cpumask_test_cpu(cpu, cpu_mask))
+			continue;
+		peak_score = max_t(unsigned int, peak_score,
+				   ax_bs_get_cpu_score(cpu));
+	}
+
+	for_each_online_cpu(cpu) {
+		unsigned int pressure;
+		unsigned int score;
+
+		if (!cpumask_test_cpu(cpu, task->cpus_ptr))
+			continue;
+		if (cpu_mask && !cpumask_test_cpu(cpu, cpu_mask))
+			continue;
+
+		score = ax_bs_get_cpu_score(cpu);
+		pressure = ax_bs_cpu_pressure_score(cpu);
+		if (score == peak_score) {
+			if (pressure <= peak_pressure) {
+				peak_pressure = pressure;
+				peak_cpu = cpu;
+			}
+		} else if (score > spill_score ||
+			   (score == spill_score && pressure <= spill_pressure)) {
+			spill_score = score;
+			spill_pressure = pressure;
+			spill_cpu = cpu;
+		}
+	}
+
+	threshold = READ_ONCE(ax_bs_spill_pressure);
+	if (!READ_ONCE(ax_bs_spread_active) || !threshold || spill_cpu < 0 ||
+	    peak_pressure < threshold)
+		return peak_cpu;
+
+	if (spilled)
+		*spilled = true;
+	return spill_cpu;
+}
+
+static bool ax_bs_can_spill_to(struct task_struct *task, int src_cpu,
+			       int dst_cpu)
+{
+	int spill_cpu;
+
+	if (!task || ax_bs_task_is_primary_visual(task))
+		return false;
+
+	spill_cpu = ax_bs_spread_cpu_mask(task, NULL, NULL);
+	if (spill_cpu < 0)
+		return false;
+
+	return ax_bs_get_cpu_score(spill_cpu) < ax_bs_get_cpu_score(src_cpu) &&
+		ax_bs_get_cpu_score(dst_cpu) >= ax_bs_get_cpu_score(spill_cpu);
+}
+
+static int ax_bs_best_cpu_mask(struct task_struct *task,
+			       const struct cpumask *cpu_mask)
 {
 	unsigned int best_score = 0;
 	unsigned int best_pressure = ~0U;
@@ -1314,6 +2061,8 @@ static int ax_bs_best_cpu(struct task_struct *task)
 		unsigned int score;
 
 		if (!cpumask_test_cpu(cpu, task->cpus_ptr))
+			continue;
+		if (cpu_mask && !cpumask_test_cpu(cpu, cpu_mask))
 			continue;
 
 		score = ax_bs_get_cpu_score(cpu);
@@ -1329,7 +2078,9 @@ static int ax_bs_best_cpu(struct task_struct *task)
 	return best_cpu;
 }
 
-static int ax_bs_fit_cpu(struct task_struct *task, unsigned int util)
+static int ax_bs_fit_cpu_mask(struct task_struct *task,
+			      const struct cpumask *cpu_mask,
+			      unsigned int util)
 {
 	unsigned int fallback_score = 0;
 	unsigned int best_score = ~0U;
@@ -1346,6 +2097,8 @@ static int ax_bs_fit_cpu(struct task_struct *task, unsigned int util)
 		unsigned int score;
 
 		if (!cpumask_test_cpu(cpu, task->cpus_ptr))
+			continue;
+		if (cpu_mask && !cpumask_test_cpu(cpu, cpu_mask))
 			continue;
 
 		score = ax_bs_get_cpu_score(cpu);
@@ -1399,20 +2152,30 @@ static int ax_bs_lowest_cpu(struct task_struct *task)
 	return best_cpu;
 }
 
-static int ax_bs_pick_cpu(struct task_struct *task, unsigned int util,
-			  bool prefer_peak)
+static int ax_bs_pick_cpu_mask(struct task_struct *task,
+			       const struct cpumask *cpu_mask,
+			       unsigned int util, bool prefer_peak,
+			       bool allow_spill)
 {
 	int cpu;
 
-	if (prefer_peak)
-		cpu = ax_bs_best_cpu(task);
+	if (allow_spill)
+		cpu = ax_bs_spread_cpu_mask(task, cpu_mask, NULL);
+	else if (prefer_peak)
+		cpu = ax_bs_best_cpu_mask(task, cpu_mask);
 	else
-		cpu = ax_bs_fit_cpu(task, util);
+		cpu = ax_bs_fit_cpu_mask(task, cpu_mask, util);
 
 	if (cpu >= 0)
 		ax_bs_note_cpu_pick(cpu);
 
 	return cpu;
+}
+
+static int ax_bs_pick_cpu(struct task_struct *task, unsigned int util,
+			  bool prefer_peak, bool allow_spill)
+{
+	return ax_bs_pick_cpu_mask(task, NULL, util, prefer_peak, allow_spill);
 }
 
 static bool ax_bs_task_is_reclaim_worker(struct task_struct *task)
@@ -1440,6 +2203,19 @@ static bool ax_bs_task_group_comm_has_prefix(struct task_struct *task,
 
 	leader = task->group_leader;
 	return leader && ax_sched_comm_has_prefix(leader->comm, prefix, len);
+}
+
+static bool ax_bs_task_is_binder_worker(struct task_struct *task)
+{
+	return task &&
+		(ax_sched_comm_has_prefix(task->comm, "binder:",
+					  sizeof("binder:") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "HwBinder:",
+					  sizeof("HwBinder:") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "hwbinder:",
+					  sizeof("hwbinder:") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "vndbinder:",
+					  sizeof("vndbinder:") - 1));
 }
 
 static bool ax_bs_task_is_composer_worker(struct task_struct *task)
@@ -1484,9 +2260,38 @@ static bool ax_bs_task_is_display_support_worker(struct task_struct *task)
 					  sizeof("RenderEngine") - 1));
 }
 
+static bool ax_bs_task_is_platform_media_worker(struct task_struct *task)
+{
+	return task &&
+		(!strcmp(task->comm, "C2NodeImpl") ||
+		 !strcmp(task->comm, "codec_looper") ||
+		 !strcmp(task->comm, "media.hwcodec") ||
+		 !strcmp(task->comm, "media.swcodec") ||
+		 !strcmp(task->comm, "mediaserver") ||
+		 !strcmp(task->comm, "recorder_looper") ||
+		 !strcmp(task->comm, "MP4WtrVidTrkThr") ||
+		 ax_sched_comm_has_prefix(task->comm, "EvtQ_c2.",
+					  sizeof("EvtQ_c2.") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "EvtQ_codecPipe",
+					  sizeof("EvtQ_codecPipe") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "poll_hevc",
+					  sizeof("poll_hevc") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "vendor.qti.medi",
+					  sizeof("vendor.qti.medi") - 1));
+}
+
+static bool ax_bs_task_is_launcher_render_support(struct task_struct *task)
+{
+	return ax_sched_task_is_render_helper(task) &&
+		ax_bs_task_group_comm_has_prefix(task, "droid.launcher",
+						 sizeof("droid.launcher") - 1);
+}
+
 static bool ax_bs_task_is_support_worker(struct task_struct *task)
 {
 	return ax_bs_task_is_display_support_worker(task) ||
+		ax_bs_task_is_platform_media_worker(task) ||
+		ax_bs_task_is_launcher_render_support(task) ||
 		(task &&
 		 ax_sched_comm_has_prefix(task->comm, "f2fs_ckpt-",
 					  sizeof("f2fs_ckpt-") - 1));
@@ -1498,6 +2303,90 @@ static unsigned int ax_bs_support_task_util(struct task_struct *task)
 		return 0;
 
 	return ax_sched_clamp_util(READ_ONCE(ax_bs_support_worker_util));
+}
+
+static bool ax_bs_target_is_launch_worker_scene(struct ax_bs_target *target)
+{
+	int mode;
+	int role;
+	int source;
+
+	if (!ax_bs_target_active(target))
+		return false;
+
+	role = READ_ONCE(target->role);
+	if (role == AX_BS_ROLE_SYSTEM_SERVER)
+		return false;
+
+	mode = READ_ONCE(target->mode);
+	source = READ_ONCE(target->source);
+	return mode == AX_BS_MODE_LAUNCH ||
+		source == AX_BS_SOURCE_POWER_LAUNCH ||
+		source == AX_BS_SOURCE_GAME_LOADING ||
+		source == AX_BS_SOURCE_TOP_APP_SWITCH;
+}
+
+static bool ax_bs_task_is_launch_worker(struct task_struct *task)
+{
+	return task &&
+		(!strcmp(task->comm, "Blocking Thread") ||
+		 !strcmp(task->comm, "Jit") ||
+		 !strcmp(task->comm, "Jit thread pool") ||
+		 !strcmp(task->comm, "HeapTaskDaemon") ||
+		 ax_sched_comm_has_prefix(task->comm, "BG Thread #",
+					  sizeof("BG Thread #") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "Lite Thread #",
+					  sizeof("Lite Thread #") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "DefaultDispatch",
+					  sizeof("DefaultDispatch") - 1) ||
+		 ax_sched_comm_has_prefix(task->comm, "GoogleApiHandle",
+					  sizeof("GoogleApiHandle") - 1));
+}
+
+static struct ax_bs_target *ax_bs_match_launch_worker_target(struct task_struct *task)
+{
+	struct ax_bs_target *best = NULL;
+	unsigned int best_rank = 0;
+	pid_t pid;
+	int i;
+
+	if (!task || !READ_ONCE(ax_bs_enabled) || !ax_bs_task_is_launch_worker(task))
+		return NULL;
+
+	pid = task_tgid_nr(task);
+	if (pid <= 0)
+		return NULL;
+
+	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
+		struct ax_bs_target *target = &ax_bs_targets[i];
+		unsigned int rank;
+
+		if (READ_ONCE(target->pid) != pid)
+			continue;
+		if (!ax_bs_target_is_launch_worker_scene(target))
+			continue;
+
+		rank = ax_bs_target_rank(target);
+		if (!best || rank > best_rank) {
+			best = target;
+			best_rank = rank;
+		}
+	}
+
+	return best;
+}
+
+static unsigned int ax_bs_launch_worker_util_for(struct ax_bs_target *target)
+{
+	if (!target)
+		return 0;
+
+	return ax_sched_clamp_util(READ_ONCE(ax_bs_launch_worker_util));
+}
+
+static unsigned int ax_bs_launch_worker_task_util(struct task_struct *task)
+{
+	return ax_bs_launch_worker_util_for(ax_bs_match_launch_worker_target(task));
 }
 
 static bool ax_bs_task_is_systemui_background_worker(struct task_struct *task)
@@ -1520,13 +2409,52 @@ static bool ax_bs_task_is_launcher_background_worker(struct task_struct *task)
 					  sizeof("LauncherBg") - 1));
 }
 
-static bool ax_bs_has_ui_background_guard_scene(void)
+static bool ax_bs_target_uses_background_guard(struct ax_bs_target *target)
 {
-	return ax_bs_has_transient_role(AX_BS_ROLE_SYSTEM_UI) ||
-		ax_bs_has_transient_role(AX_BS_ROLE_LAUNCHER);
+	int mode;
+	int role;
+	int source;
+
+	if (!ax_bs_target_active(target))
+		return false;
+
+	mode = READ_ONCE(target->mode);
+	if (mode == AX_BS_MODE_TOP_APP)
+		return false;
+
+	role = READ_ONCE(target->role);
+	if (role != AX_BS_ROLE_SYSTEM_UI && role != AX_BS_ROLE_LAUNCHER)
+		return false;
+
+	source = READ_ONCE(target->source);
+	switch (source) {
+	case AX_BS_SOURCE_START_ACTIVITY_BINDER:
+	case AX_BS_SOURCE_POWER_LAUNCH:
+	case AX_BS_SOURCE_GAME_LOADING:
+	case AX_BS_SOURCE_TOP_APP_SWITCH:
+		return false;
+	default:
+		return true;
+	}
 }
 
-static bool ax_bs_task_has_visual_role(struct task_struct *task)
+static bool ax_bs_has_ui_background_guard_scene(bool auto_systemui)
+{
+	int i;
+
+	if (auto_systemui)
+		return true;
+
+	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
+		if (ax_bs_target_uses_background_guard(&ax_bs_targets[i]))
+			return true;
+	}
+
+	return false;
+}
+
+static bool ax_bs_task_has_visual_role(struct task_struct *task,
+					bool guard_scene, pid_t auto_tgid)
 {
 	pid_t pid;
 	int i;
@@ -1537,9 +2465,12 @@ static bool ax_bs_task_has_visual_role(struct task_struct *task)
 	pid = task_tgid_nr(task);
 	if (pid <= 0)
 		return false;
+	if (auto_tgid == pid)
+		return true;
 
 	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
 		struct ax_bs_target *target = &ax_bs_targets[i];
+		int mode;
 		int role;
 
 		if (!ax_bs_target_active(target))
@@ -1547,40 +2478,59 @@ static bool ax_bs_task_has_visual_role(struct task_struct *task)
 		if (READ_ONCE(target->pid) != pid)
 			continue;
 
+		mode = READ_ONCE(target->mode);
 		role = READ_ONCE(target->role);
-		if (role == AX_BS_ROLE_SYSTEM_UI ||
-		    role == AX_BS_ROLE_LAUNCHER ||
-		    role == AX_BS_ROLE_TOP_APP)
+		if ((mode == AX_BS_MODE_LAUNCH &&
+		     role != AX_BS_ROLE_SYSTEM_SERVER) ||
+		    role == AX_BS_ROLE_SYSTEM_UI ||
+		    role == AX_BS_ROLE_LAUNCHER)
 			return true;
+		if (role == AX_BS_ROLE_TOP_APP)
+			return !guard_scene;
 	}
 
 	return false;
 }
 
-static bool ax_bs_task_is_offscreen_scene_task(struct task_struct *task)
+static void ax_bs_get_task_scene(struct task_struct *task,
+				 struct ax_bs_task_scene *scene)
 {
-	return task &&
-		ax_bs_has_ui_background_guard_scene() &&
-		!ax_bs_task_has_visual_role(task) &&
-		!ax_bs_task_is_display_support_worker(task);
+	struct ax_bs_auto_state auto_state;
+	pid_t auto_tgid = -1;
+	bool auto_systemui = false;
+
+	if (ax_bs_read_active_auto_state(&auto_state)) {
+		auto_tgid = auto_state.tgid;
+		auto_systemui = auto_state.systemui;
+	}
+	scene->guard = ax_bs_has_ui_background_guard_scene(auto_systemui);
+	scene->display_support = ax_bs_task_is_display_support_worker(task);
+	scene->visual = ax_bs_task_has_visual_role(task, scene->guard,
+						    auto_tgid);
+	scene->offscreen = task && scene->guard && !scene->visual &&
+		!scene->display_support;
 }
 
-static bool ax_bs_task_is_offscreen_render_worker(struct task_struct *task)
+static bool ax_bs_task_is_offscreen_render_worker(struct task_struct *task,
+						  bool offscreen)
 {
-	return ax_bs_task_is_offscreen_scene_task(task) &&
+	return offscreen &&
+		!ax_bs_task_is_launcher_render_support(task) &&
 		ax_sched_task_is_render_helper(task);
 }
 
-static bool ax_bs_task_is_offscreen_webview_worker(struct task_struct *task)
+static bool ax_bs_task_is_offscreen_webview_worker(struct task_struct *task,
+						   bool offscreen)
 {
-	return ax_bs_task_is_offscreen_scene_task(task) &&
+	return offscreen &&
 		ax_sched_comm_has_prefix(task->comm, AX_SCHED_CHROME_THREAD_POOL,
 					 sizeof(AX_SCHED_CHROME_THREAD_POOL) - 1);
 }
 
-static bool ax_bs_task_is_offscreen_app_worker(struct task_struct *task)
+static bool ax_bs_task_is_offscreen_app_worker(struct task_struct *task,
+					       bool offscreen)
 {
-	return ax_bs_task_is_offscreen_scene_task(task) &&
+	return offscreen &&
 		(!strcmp(task->comm, "Blocking Thread") ||
 		 ax_sched_comm_has_prefix(task->comm, "Timer-",
 					  sizeof("Timer-") - 1) ||
@@ -1588,9 +2538,10 @@ static bool ax_bs_task_is_offscreen_app_worker(struct task_struct *task)
 					  sizeof("BG Thread #") - 1));
 }
 
-static bool ax_bs_task_is_offscreen_pool_worker(struct task_struct *task)
+static bool ax_bs_task_is_offscreen_pool_worker(struct task_struct *task,
+						bool offscreen)
 {
-	return ax_bs_task_is_offscreen_scene_task(task) &&
+	return offscreen &&
 		(ax_sched_comm_has_prefix(task->comm, "highpool[",
 					  sizeof("highpool[") - 1) ||
 		 ax_sched_comm_has_prefix(task->comm, "lowpool[",
@@ -1621,18 +2572,13 @@ static bool ax_bs_task_is_offscreen_pool_worker(struct task_struct *task)
 					  sizeof("ProcessStablePh") - 1));
 }
 
-static bool ax_bs_task_is_offscreen_media_worker(struct task_struct *task)
+static bool ax_bs_task_is_offscreen_media_worker(struct task_struct *task,
+						 bool offscreen)
 {
-	return ax_bs_task_is_offscreen_scene_task(task) &&
-		(!strcmp(task->comm, "C2NodeImpl") ||
-		 !strcmp(task->comm, "codec_looper") ||
-		 !strcmp(task->comm, "recorder_looper") ||
-		 ax_sched_comm_has_prefix(task->comm, "EvtQ_c2.",
-					  sizeof("EvtQ_c2.") - 1) ||
-		 ax_sched_comm_has_prefix(task->comm, "ExoPlayer:",
-					  sizeof("ExoPlayer:") - 1) ||
-		 ax_sched_comm_has_prefix(task->comm, "poll_hevc",
-					  sizeof("poll_hevc") - 1));
+	return offscreen &&
+		!ax_bs_task_is_platform_media_worker(task) &&
+		ax_sched_comm_has_prefix(task->comm, "ExoPlayer:",
+					 sizeof("ExoPlayer:") - 1);
 }
 
 static bool ax_bs_task_is_runtime_background_worker(struct task_struct *task)
@@ -1648,19 +2594,21 @@ static bool ax_bs_task_is_runtime_background_worker(struct task_struct *task)
 		 !strcmp(task->comm, "ReferenceQueueD"));
 }
 
-static bool ax_bs_task_is_background_worker(struct task_struct *task)
+static bool ax_bs_task_is_background_worker(
+		struct task_struct *task, const struct ax_bs_task_scene *scene)
 {
-	return task &&
-		(!strcmp(task->comm, "ll.splashworker") ||
-		 ax_bs_task_is_offscreen_render_worker(task) ||
-		 ax_bs_task_is_offscreen_webview_worker(task) ||
-		 ax_bs_task_is_offscreen_app_worker(task) ||
-		 ax_bs_task_is_offscreen_pool_worker(task) ||
-		 ax_bs_task_is_offscreen_media_worker(task) ||
-		 (ax_bs_task_is_runtime_background_worker(task) &&
-		  ax_bs_has_ui_background_guard_scene()) ||
-		 ax_bs_task_is_systemui_background_worker(task) ||
-		 ax_bs_task_is_launcher_background_worker(task));
+	if (!task || !scene->guard)
+		return false;
+
+	return !strcmp(task->comm, "ll.splashworker") ||
+		ax_bs_task_is_systemui_background_worker(task) ||
+		ax_bs_task_is_launcher_background_worker(task) ||
+		ax_bs_task_is_runtime_background_worker(task) ||
+		ax_bs_task_is_offscreen_render_worker(task, scene->offscreen) ||
+		ax_bs_task_is_offscreen_webview_worker(task, scene->offscreen) ||
+		ax_bs_task_is_offscreen_app_worker(task, scene->offscreen) ||
+		ax_bs_task_is_offscreen_pool_worker(task, scene->offscreen) ||
+		ax_bs_task_is_offscreen_media_worker(task, scene->offscreen);
 }
 
 static unsigned int ax_bs_latency_task_util(struct task_struct *task)
@@ -1670,8 +2618,10 @@ static unsigned int ax_bs_latency_task_util(struct task_struct *task)
 	if (!task)
 		return 0;
 
-	util = max_t(unsigned int, ax_bs_target_util(ax_bs_match_target(task)),
+	util = max_t(unsigned int, ax_bs_match_target_util(task, NULL, NULL),
 		     ax_bs_lock_task_util(task));
+	util = max_t(unsigned int, util, ax_bs_auto_top_app_task_util(task));
+	util = max_t(unsigned int, util, ax_bs_launch_worker_task_util(task));
 #if defined(AX_BS_HAS_FRAME_BOOST)
 	util = max_t(unsigned int, util, ax_frame_boost_task_util(task));
 #endif
@@ -1685,17 +2635,27 @@ static unsigned int ax_bs_latency_task_util(struct task_struct *task)
 	return util;
 }
 
-static bool ax_bs_task_is_latency_exempt(struct task_struct *task)
+static bool ax_bs_task_is_latency_exempt(
+		struct task_struct *task, const struct ax_bs_task_scene *scene)
 {
 	if (!task)
 		return false;
 
 	if (ax_bs_latency_task_util(task))
 		return true;
+	if (ax_bs_support_task_util(task))
+		return true;
+	if (READ_ONCE(ax_bs_scene_focus) && ax_bs_task_is_binder_worker(task))
+		return true;
 	if (ax_sched_task_is_render_helper(task))
-		return !ax_bs_task_is_offscreen_render_worker(task);
+		return !ax_bs_task_is_offscreen_render_worker(task,
+							      scene->offscreen);
 
-	return !strcmp(task->comm, AX_SCHED_ANDROID_UI) ||
+	return ax_bs_task_group_comm_has_prefix(task, "system_server",
+						sizeof("system_server") - 1) ||
+		ax_bs_task_group_comm_has_prefix(task, "surfaceflinger",
+						 sizeof("surfaceflinger") - 1) ||
+		!strcmp(task->comm, AX_SCHED_ANDROID_UI) ||
 		!strcmp(task->comm, AX_SCHED_ANDROID_DISPLAY) ||
 		!strcmp(task->comm, "system_server") ||
 		!strcmp(task->comm, "surfaceflinger");
@@ -1703,19 +2663,184 @@ static bool ax_bs_task_is_latency_exempt(struct task_struct *task)
 
 static bool ax_bs_task_is_background_guard_candidate(struct task_struct *task)
 {
+	struct ax_bs_task_scene scene;
+
 	if (!task || !ax_bs_has_transient_scene())
 		return false;
-	if (ax_bs_task_is_latency_exempt(task))
+	ax_bs_get_task_scene(task, &scene);
+	if (!scene.guard)
+		return false;
+	if (ax_bs_task_is_latency_exempt(task, &scene))
 		return false;
 	if (ax_bs_task_is_reclaim_worker(task))
 		return false;
-	if (ax_bs_task_is_background_worker(task))
-		return true;
 	if (task->flags & PF_KTHREAD)
 		return false;
+	if (task->policy != SCHED_NORMAL || task_nice(task) < 0)
+		return false;
+	if (ax_bs_task_is_background_worker(task, &scene))
+		return true;
 
-	return task_nice(task) > 0;
+	return task_nice(task) > 0 && scene.offscreen;
 }
+
+#if defined(AX_BS_HAS_DYNAMIC_SVP_HOOK)
+static unsigned int ax_bs_task_rank(struct task_struct *task)
+{
+	struct ax_bs_auto_state auto_state;
+	struct ax_bs_task_scene scene;
+	unsigned int target_rank;
+	unsigned int target_util;
+	unsigned int rank = 0;
+
+	if (!task || !READ_ONCE(ax_bs_enabled))
+		return 0;
+
+	target_util = ax_bs_match_target_util(task, NULL, &target_rank);
+	if (target_util)
+		rank = max_t(unsigned int, rank, target_rank);
+	if (ax_bs_read_active_auto_state(&auto_state) &&
+	    ax_bs_auto_top_app_task_matches(task, &auto_state))
+		rank = max_t(unsigned int, rank,
+				     auto_state.systemui ?
+				     AX_BS_RANK_LAUNCH : AX_BS_RANK_VISUAL);
+	if (ax_bs_lock_task_util(task))
+		rank = max_t(unsigned int, rank, AX_BS_RANK_LOCK);
+	if (!target_util && ax_bs_launch_worker_task_util(task))
+		rank = max_t(unsigned int, rank, AX_BS_RANK_LAUNCH);
+	if (ax_bs_task_is_support_worker(task)) {
+		if (ax_bs_task_is_display_support_worker(task))
+			rank = max_t(unsigned int, rank, AX_BS_RANK_DISPLAY);
+		else
+			rank = max_t(unsigned int, rank, AX_BS_RANK_SUPPORT);
+	}
+#if defined(AX_BS_HAS_FRAME_BOOST)
+	if (ax_frame_boost_task_util(task))
+		rank = max_t(unsigned int, rank, AX_BS_RANK_FRAME);
+#endif
+#if defined(AX_BS_HAS_SVP_POLICY)
+	if (ax_svp_task_util(task))
+		rank = max_t(unsigned int, rank, AX_BS_RANK_VISUAL);
+#endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	if (ax_game_boost_task_util(task))
+		rank = max_t(unsigned int, rank, AX_BS_RANK_DISPLAY);
+#endif
+	if (!rank && ax_bs_task_is_reclaim_worker(task))
+		rank = AX_BS_RANK_RECLAIM;
+	if (!rank) {
+		ax_bs_get_task_scene(task, &scene);
+		if (ax_bs_task_is_background_worker(task, &scene))
+			rank = AX_BS_RANK_BACKGROUND;
+	}
+
+	return rank;
+}
+
+static void ax_bs_dynamic_svp_preempt(void *unused, struct task_struct *task,
+				      struct task_struct *curr, bool *preempt)
+{
+	unsigned int curr_rank;
+	unsigned int min_delta;
+	unsigned int task_rank;
+
+	(void)unused;
+
+	if (!preempt || *preempt || !task || !curr || task == curr)
+		return;
+	if (!READ_ONCE(ax_bs_enabled) || !READ_ONCE(ax_bs_dynamic_svp))
+		return;
+	if (!ax_bs_has_transient_scene())
+		return;
+	if (task->policy != SCHED_NORMAL || curr->policy != SCHED_NORMAL)
+		return;
+
+	task_rank = ax_bs_task_rank(task);
+	if (task_rank < READ_ONCE(ax_bs_dynamic_svp_min_rank))
+		return;
+
+	curr_rank = ax_bs_task_rank(curr);
+	min_delta = READ_ONCE(ax_bs_dynamic_svp_min_delta);
+	if (task_rank <= curr_rank || task_rank - curr_rank < min_delta)
+		return;
+
+	*preempt = true;
+	atomic64_inc(&ax_bs_dynamic_svp_preempts);
+}
+#endif
+
+#if defined(AX_BS_HAS_IOLIMIT_HOOK)
+static void ax_bs_iolimit_rw(void *unused, struct file *file, size_t count,
+			     int rw, unsigned int *delay_ms)
+{
+	unsigned int delay;
+	unsigned int min_bytes;
+
+	(void)unused;
+	(void)file;
+	(void)rw;
+
+	if (!delay_ms || !READ_ONCE(ax_bs_enabled) || !READ_ONCE(ax_bs_io_guard))
+		return;
+
+	delay = READ_ONCE(ax_bs_io_limit_delay_ms);
+	min_bytes = READ_ONCE(ax_bs_io_limit_min_bytes);
+	if (!delay || count < min_bytes)
+		return;
+	if (!ax_bs_task_is_background_guard_candidate(current))
+		return;
+
+	delay = clamp_t(unsigned int, delay, 1, 16);
+	*delay_ms = max_t(unsigned int, *delay_ms, delay);
+	atomic64_inc(&ax_bs_io_limit_delays);
+}
+#endif
+
+#if defined(AX_BS_HAS_GPU_CONTEXT_HOOK)
+static bool ax_bs_task_should_boost_gpu_context(struct task_struct *task)
+{
+	struct ax_bs_task_scene scene;
+
+	if (!task || !READ_ONCE(ax_bs_enabled))
+		return false;
+	ax_bs_get_task_scene(task, &scene);
+	if (ax_bs_task_is_background_worker(task, &scene))
+		return false;
+	if (scene.visual)
+		return true;
+	if (scene.display_support)
+		return true;
+#if defined(AX_BS_HAS_FRAME_BOOST)
+	if (ax_frame_boost_task_util(task))
+		return true;
+#endif
+#if defined(AX_BS_HAS_GAME_BOOST)
+	if (ax_game_boost_task_util(task))
+		return true;
+#endif
+	return false;
+}
+
+static void ax_bs_gpu_context_create(void *unused, unsigned int flags)
+{
+	unsigned int duration_ms;
+
+	(void)unused;
+	(void)flags;
+
+	if (!READ_ONCE(ax_bs_gpu_context_boost))
+		return;
+	if (!ax_bs_task_should_boost_gpu_context(current))
+		return;
+
+	duration_ms = clamp_t(unsigned int,
+			      READ_ONCE(ax_bs_gpu_context_boost_ms), 1, 1000);
+	ax_sched_boost(AX_BOOST_SOURCE_LAUNCH, AX_BOOST_LEVEL_HEAVY,
+		       AX_BOOST_GPU | AX_BOOST_MEMLAT |
+		       AX_BOOST_DDR | AX_BOOST_L3, duration_ms);
+	atomic64_inc(&ax_bs_gpu_context_boosts);
+}
+#endif
 
 static int ax_bs_task_ioprio(struct task_struct *task)
 {
@@ -1727,6 +2852,15 @@ static int ax_bs_task_ioprio(struct task_struct *task)
 	task_unlock(task);
 
 	return ioprio;
+}
+
+static int ax_bs_set_task_ioprio(struct task_struct *task, int ioprio)
+{
+#if defined(AX_BS_HAS_IOPRIO)
+	return set_task_ioprio(task, ioprio);
+#else
+	return -EOPNOTSUPP;
+#endif
 }
 
 static int ax_bs_io_guard_ioprio(void)
@@ -1812,7 +2946,7 @@ static void ax_bs_restore_io_guard_pid(struct pid *pid_ref, int old_ioprio,
 
 	if (task) {
 		if (ax_bs_task_ioprio(task) == guard_ioprio)
-			set_task_ioprio(task, old_ioprio);
+			ax_bs_set_task_ioprio(task, old_ioprio);
 		put_task_struct(task);
 	}
 	ax_bs_release_pid(pid_ref);
@@ -1874,7 +3008,7 @@ static void ax_bs_guard_task_io(struct task_struct *task, unsigned long expire)
 		if (IOPRIO_PRIO_CLASS(old_ioprio) == IOPRIO_CLASS_RT)
 			return;
 		if (old_ioprio != target_ioprio) {
-			if (set_task_ioprio(task, target_ioprio))
+			if (ax_bs_set_task_ioprio(task, target_ioprio))
 				return;
 		}
 		mutex_lock(&ax_bs_io_guard_lock);
@@ -1924,7 +3058,7 @@ static void ax_bs_guard_task_io(struct task_struct *task, unsigned long expire)
 
 	ax_bs_release_pid(pid_ref);
 	ax_bs_restore_io_guard_pid(old_pid, old_guard_ioprio, old_guard_target);
-	if (guarded && set_task_ioprio(task, target_ioprio)) {
+	if (guarded && ax_bs_set_task_ioprio(task, target_ioprio)) {
 		mutex_lock(&ax_bs_io_guard_lock);
 		guard = ax_bs_find_io_guard_locked(tid);
 		if (guard)
@@ -2241,11 +3375,20 @@ static int ax_svp_best_cpu_mask(struct task_struct *task,
 	unsigned int best_score = 0;
 	unsigned int best_pressure = ~0U;
 	bool balance = READ_ONCE(ax_svp_balance);
+	bool spilled = false;
 	int best_cpu = -1;
 	int cpu;
 
 	if (balanced)
 		*balanced = false;
+	if (balance && !ax_bs_task_is_primary_visual(task)) {
+		best_cpu = ax_bs_spread_cpu_mask(task, local_cpu_mask, &spilled);
+		if (best_cpu >= 0) {
+			if (balanced)
+				*balanced = spilled;
+			return best_cpu;
+		}
+	}
 
 	for_each_online_cpu(cpu) {
 		unsigned int pressure = 0;
@@ -2298,6 +3441,7 @@ static bool ax_svp_pick_task_rq(struct task_struct *task,
 	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_SVP))
 		return false;
 
+	ax_bs_note_matching_target_cpu(task, cpu);
 	if (READ_ONCE(ax_svp_balance))
 		ax_bs_note_cpu_pick(cpu);
 	if (balanced)
@@ -2322,6 +3466,7 @@ static bool ax_svp_pick_fallback_rq(int prev_cpu, struct task_struct *task,
 	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_SVP))
 		return false;
 
+	ax_bs_note_matching_target_cpu(task, cpu);
 	if (READ_ONCE(ax_svp_balance))
 		ax_bs_note_cpu_pick(cpu);
 	if (balanced)
@@ -2345,6 +3490,7 @@ static bool ax_svp_pick_lowest_rq(struct task_struct *task,
 	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_SVP))
 		return false;
 
+	ax_bs_note_matching_target_cpu(task, cpu);
 	if (READ_ONCE(ax_svp_balance))
 		ax_bs_note_cpu_pick(cpu);
 	if (balanced)
@@ -2391,6 +3537,8 @@ static bool ax_svp_blocks_migration(struct task_struct *task, int src_cpu,
 		return true;
 
 	if (ax_bs_get_cpu_score(dst_cpu) >= ax_bs_get_cpu_score(src_cpu))
+		return false;
+	if (ax_bs_can_spill_to(task, src_cpu, dst_cpu))
 		return false;
 
 	atomic64_inc(&ax_svp_migration_blocks);
@@ -2505,7 +3653,7 @@ static bool ax_svp_promote_rt(struct pid *pid, int *policy, int *priority)
 		return false;
 	}
 	rt_prio = clamp_t(unsigned int, READ_ONCE(ax_svp_rt_prio), 1,
-			 MAX_USER_RT_PRIO - 1);
+			 MAX_RT_PRIO - 1);
 	param.sched_priority = rt_prio;
 	ret = sched_setscheduler_nocheck(task, SCHED_FIFO, &param);
 	put_task_struct(task);
@@ -3266,33 +4414,44 @@ static void ax_bs_mutex_wait_finish(void *unused, struct mutex *lock)
 static bool ax_bs_pick_task_rq(struct task_struct *task,
 			       struct ax_sched_cpu_pick *pick)
 {
+	struct ax_bs_target *launch_worker_target;
 	struct ax_bs_target *target;
+	unsigned int auto_top_app_util;
+	unsigned int launch_worker_util;
 	unsigned int lock_util;
 	unsigned int support_util;
 	unsigned int target_util;
 	unsigned int util;
+	bool primary;
 	int cpu;
 
 	if (!pick || !READ_ONCE(ax_bs_big_only))
 		return false;
 
-	target = ax_bs_match_target(task);
-	target_util = ax_bs_target_util(target);
+	target_util = ax_bs_match_target_util(task, &target, NULL);
+	auto_top_app_util = ax_bs_auto_top_app_task_util(task);
+	launch_worker_target = ax_bs_match_launch_worker_target(task);
+	launch_worker_util = ax_bs_launch_worker_util_for(launch_worker_target);
 	lock_util = ax_bs_lock_task_util(task);
 	support_util = ax_bs_support_task_util(task);
-	if (!target_util && !lock_util && !support_util)
+	primary = ax_bs_task_is_primary_visual(task);
+	if (!target_util && !auto_top_app_util && !launch_worker_util &&
+	    !lock_util && !support_util)
 		return false;
 
-	util = max_t(unsigned int, target_util,
-		     max_t(unsigned int, lock_util, support_util));
-	cpu = ax_bs_pick_cpu(task, util, target_util || lock_util ||
-			     (support_util &&
-			      ax_bs_task_is_display_support_worker(task)));
+	util = max_t(unsigned int, max(target_util, auto_top_app_util),
+		     max_t(unsigned int, launch_worker_util,
+			   max_t(unsigned int, lock_util, support_util)));
+	cpu = ax_bs_pick_cpu(task, util, lock_util || primary,
+			     !lock_util && !primary);
 	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_BURST))
 		return false;
 
+	ax_bs_note_target_cpu(target, task, cpu);
 	if (target_util)
 		atomic64_inc(&target->hits);
+	if (launch_worker_util)
+		atomic64_inc(&launch_worker_target->hits);
 #if defined(AX_BS_HAS_LOCK_BOOST)
 	if (lock_util) {
 		atomic64_inc(&ax_bs_lock_hits);
@@ -3308,34 +4467,45 @@ static bool ax_bs_pick_task_rq(struct task_struct *task,
 static bool ax_bs_pick_fallback_rq(int prev_cpu, struct task_struct *task,
 				   struct ax_sched_cpu_pick *pick)
 {
+	struct ax_bs_target *launch_worker_target;
 	struct ax_bs_target *target;
+	unsigned int auto_top_app_util;
+	unsigned int launch_worker_util;
 	unsigned int lock_util;
 	unsigned int support_util;
 	unsigned int target_util;
 	unsigned int util;
+	bool primary;
 	int cpu;
 
 	if (!pick || !READ_ONCE(ax_bs_fallback_big))
 		return false;
 
-	target = ax_bs_match_target(task);
-	target_util = ax_bs_target_util(target);
+	target_util = ax_bs_match_target_util(task, &target, NULL);
+	auto_top_app_util = ax_bs_auto_top_app_task_util(task);
+	launch_worker_target = ax_bs_match_launch_worker_target(task);
+	launch_worker_util = ax_bs_launch_worker_util_for(launch_worker_target);
 	lock_util = ax_bs_lock_task_util(task);
 	support_util = ax_bs_support_task_util(task);
-	if (!target_util && !lock_util && !support_util)
+	primary = ax_bs_task_is_primary_visual(task);
+	if (!target_util && !auto_top_app_util && !launch_worker_util &&
+	    !lock_util && !support_util)
 		return false;
 
-	util = max_t(unsigned int, target_util,
-		     max_t(unsigned int, lock_util, support_util));
-	cpu = ax_bs_pick_cpu(task, util, target_util || lock_util ||
-			     (support_util &&
-			      ax_bs_task_is_display_support_worker(task)));
+	util = max_t(unsigned int, max(target_util, auto_top_app_util),
+		     max_t(unsigned int, launch_worker_util,
+			   max_t(unsigned int, lock_util, support_util)));
+	cpu = ax_bs_pick_cpu(task, util, lock_util || primary,
+			     !lock_util && !primary);
 	if (cpu == prev_cpu ||
 	    !ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_BURST))
 		return false;
 
+	ax_bs_note_target_cpu(target, task, cpu);
 	if (target_util)
 		atomic64_inc(&target->hits);
+	if (launch_worker_util)
+		atomic64_inc(&launch_worker_target->hits);
 #if defined(AX_BS_HAS_LOCK_BOOST)
 	if (lock_util) {
 		atomic64_inc(&ax_bs_lock_hits);
@@ -3349,9 +4519,28 @@ static bool ax_bs_pick_fallback_rq(int prev_cpu, struct task_struct *task,
 }
 
 #if defined(AX_BS_HAS_FRAME_BOOST)
-static bool ax_bs_needs_frame_rescue(struct task_struct *task)
+static bool ax_bs_pick_frame_rq(struct task_struct *task,
+				const struct cpumask *cpu_mask, int prev_cpu,
+				bool fallback,
+				struct ax_sched_cpu_pick *pick)
 {
-	return ax_frame_boost_task_util(task) != 0;
+	unsigned int util = ax_frame_boost_task_util(task);
+	int cpu;
+
+	if (!READ_ONCE(ax_bs_enabled) || !READ_ONCE(ax_bs_big_only) ||
+	    (fallback && !READ_ONCE(ax_bs_fallback_big)) || !util)
+		return false;
+
+	cpu = ax_bs_pick_cpu_mask(task, cpu_mask, util, true, false);
+	if (cpu == prev_cpu)
+		return false;
+
+	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_FRAME))
+		return false;
+#if defined(AX_BS_HAS_MAP_UTIL_FREQ)
+	ax_frame_boost_note_cpu(task, cpu);
+#endif
+	return true;
 }
 #endif
 
@@ -3364,11 +4553,15 @@ static void ax_bs_select_task_rq(void *unused, struct task_struct *task,
 	if (!new_cpu)
 		return;
 
+#if defined(AX_BS_HAS_INPUT_HOOK)
+	ax_bs_note_auto_top_app(task);
+#endif
+	if (!ax_bs_cpu_topology_ready())
+		return;
 	ax_sched_init_cpu_pick(&pick);
 
 #if defined(AX_BS_HAS_FRAME_BOOST)
-	if (ax_bs_needs_frame_rescue(task))
-		ax_frame_boost_pick_task_rq(task, &pick);
+	ax_bs_pick_frame_rq(task, NULL, AX_SCHED_CPU_NONE, false, &pick);
 #endif
 #if defined(AX_BS_HAS_SVP_POLICY)
 	if (!ax_sched_has_cpu_pick(&pick))
@@ -3385,8 +4578,10 @@ static void ax_bs_select_task_rq(void *unused, struct task_struct *task,
 	if (!ax_sched_has_cpu_pick(&pick))
 		ax_bs_pick_reclaim_rq(task, prev_cpu, &pick);
 
-	if (ax_sched_has_cpu_pick(&pick))
+	if (ax_sched_has_cpu_pick(&pick)) {
+		ax_bs_note_auto_cpu(task, pick.cpu);
 		*new_cpu = pick.cpu;
+	}
 }
 
 static void ax_bs_select_fallback_rq(void *unused, int prev_cpu,
@@ -3394,14 +4589,13 @@ static void ax_bs_select_fallback_rq(void *unused, int prev_cpu,
 {
 	struct ax_sched_cpu_pick pick;
 
-	if (!new_cpu)
+	if (!new_cpu || !ax_bs_cpu_topology_ready())
 		return;
 
 	ax_sched_init_cpu_pick(&pick);
 
 #if defined(AX_BS_HAS_FRAME_BOOST)
-	if (ax_bs_needs_frame_rescue(task))
-		ax_frame_boost_pick_fallback_rq(prev_cpu, task, &pick);
+	ax_bs_pick_frame_rq(task, NULL, prev_cpu, true, &pick);
 #endif
 #if defined(AX_BS_HAS_SVP_POLICY)
 	if (!ax_sched_has_cpu_pick(&pick))
@@ -3418,25 +4612,32 @@ static void ax_bs_select_fallback_rq(void *unused, int prev_cpu,
 	if (!ax_sched_has_cpu_pick(&pick))
 		ax_bs_pick_reclaim_rq(task, prev_cpu, &pick);
 
-	if (ax_sched_has_cpu_pick(&pick))
+	if (ax_sched_has_cpu_pick(&pick)) {
+		ax_bs_note_auto_cpu(task, pick.cpu);
 		*new_cpu = pick.cpu;
+	}
 }
 
 #if defined(AX_BS_HAS_FRAME_BOOST) || defined(AX_BS_HAS_SVP_POLICY) || defined(AX_BS_HAS_GAME_BOOST)
 static void ax_bs_find_lowest_rq(void *unused, struct task_struct *task,
 				 struct cpumask *local_cpu_mask,
+#if defined(AX_BS_FIND_LOWEST_RQ_HAS_RET)
+				 int ret,
+#endif
 				 int *lowest_cpu)
 {
 	struct ax_sched_cpu_pick pick;
 
-	if (!lowest_cpu)
+#if defined(AX_BS_FIND_LOWEST_RQ_HAS_RET)
+	(void)ret;
+#endif
+	if (!lowest_cpu || !ax_bs_cpu_topology_ready())
 		return;
 
 	ax_sched_init_cpu_pick(&pick);
 
 #if defined(AX_BS_HAS_FRAME_BOOST)
-	if (ax_bs_needs_frame_rescue(task))
-		ax_frame_boost_pick_lowest_rq(task, local_cpu_mask, &pick);
+	ax_bs_pick_frame_rq(task, local_cpu_mask, AX_SCHED_CPU_NONE, false, &pick);
 #endif
 #if defined(AX_BS_HAS_SVP_POLICY)
 	if (!ax_sched_has_cpu_pick(&pick))
@@ -3447,8 +4648,10 @@ static void ax_bs_find_lowest_rq(void *unused, struct task_struct *task,
 		ax_game_boost_pick_lowest_rq(task, local_cpu_mask, &pick);
 #endif
 
-	if (ax_sched_has_cpu_pick(&pick))
+	if (ax_sched_has_cpu_pick(&pick)) {
+		ax_bs_note_auto_cpu(task, pick.cpu);
 		*lowest_cpu = pick.cpu;
+	}
 }
 #endif
 
@@ -3472,12 +4675,11 @@ void ax_burst_sched_note_binder_assist(struct task_struct *task,
 	if (!task || !util_min)
 		return;
 
-	target = ax_bs_match_target(task);
-	if (!ax_bs_target_util(target))
+	if (!ax_bs_match_target_util(task, &target, NULL))
 		return;
 
-	ax_bs_note_wakeup(target);
-	atomic64_inc(&target->hits);
+	if (!ax_bs_note_wakeup(target, task, false, true))
+		return;
 	atomic64_inc(&ax_bs_binder_assists);
 }
 EXPORT_SYMBOL_GPL(ax_burst_sched_note_binder_assist);
@@ -3485,14 +4687,18 @@ EXPORT_SYMBOL_GPL(ax_burst_sched_note_binder_assist);
 static void ax_bs_can_migrate_task(void *unused, struct task_struct *task,
 				   int dst_cpu, int *can_migrate)
 {
+	struct ax_bs_target *launch_worker_target;
 	struct ax_bs_target *target;
+	unsigned int auto_top_app_util;
+	unsigned int launch_worker_util;
 	unsigned int lock_util;
 	unsigned int game_util = 0;
 	unsigned int support_util;
 	unsigned int target_util;
 	int src_cpu;
 
-	if (!task || !can_migrate || !*can_migrate)
+	if (!task || !can_migrate || !*can_migrate ||
+	    !ax_bs_cpu_topology_ready())
 		return;
 
 	if (dst_cpu < 0 || dst_cpu >= nr_cpu_ids || !cpu_online(dst_cpu))
@@ -3512,29 +4718,46 @@ static void ax_bs_can_migrate_task(void *unused, struct task_struct *task,
 	if (!READ_ONCE(ax_bs_migration_assist) || !READ_ONCE(ax_bs_big_only))
 		return;
 
-	target = ax_bs_match_target(task);
-	target_util = ax_bs_target_util(target);
-	lock_util = ax_bs_lock_task_util(task);
-	support_util = ax_bs_support_task_util(task);
-#if defined(AX_BS_HAS_GAME_BOOST)
-	game_util = ax_game_boost_task_util(task);
-#endif
-	if (!target_util && !lock_util && !support_util && !game_util)
-		return;
-
 	if (!cpumask_test_cpu(dst_cpu, task->cpus_ptr)) {
 		*can_migrate = 0;
 		return;
 	}
 
+	if (READ_ONCE(ax_bs_background_guard) &&
+	    READ_ONCE(ax_bs_scene_focus) &&
+	    ax_bs_task_is_background_guard_candidate(task) &&
+	    ax_bs_get_cpu_score(dst_cpu) > ax_bs_get_cpu_score(src_cpu)) {
+		atomic64_inc(&ax_bs_background_guard_assists);
+		*can_migrate = 0;
+		return;
+	}
+
+	target_util = ax_bs_match_target_util(task, &target, NULL);
+	auto_top_app_util = ax_bs_auto_top_app_task_util(task);
+	launch_worker_target = ax_bs_match_launch_worker_target(task);
+	launch_worker_util = ax_bs_launch_worker_util_for(launch_worker_target);
+	lock_util = ax_bs_lock_task_util(task);
+	support_util = ax_bs_support_task_util(task);
+#if defined(AX_BS_HAS_GAME_BOOST)
+	game_util = ax_game_boost_task_util(task);
+#endif
+	if (!target_util && !auto_top_app_util && !launch_worker_util && !lock_util &&
+	    !support_util && !game_util)
+		return;
+
 	if (ax_bs_get_cpu_score(dst_cpu) < ax_bs_get_cpu_score(src_cpu)) {
-		if (target_util && !lock_util && !game_util &&
+		if (!lock_util && !game_util &&
+		    ax_bs_can_spill_to(task, src_cpu, dst_cpu))
+			return;
+		if (target_util && !launch_worker_util && !lock_util && !game_util &&
 		    !ax_bs_should_hold_migration(target)) {
 			atomic64_inc(&ax_bs_migration_releases);
 			return;
 		}
 		if (target_util)
 			atomic64_inc(&target->hits);
+		if (launch_worker_util)
+			atomic64_inc(&launch_worker_target->hits);
 #if defined(AX_BS_HAS_LOCK_BOOST)
 		if (lock_util) {
 			atomic64_inc(&ax_bs_lock_hits);
@@ -3548,32 +4771,75 @@ static void ax_bs_can_migrate_task(void *unused, struct task_struct *task,
 	}
 }
 
+#if defined(AX_BS_ENQUEUE_TASK_HAS_FLAGS)
+static void ax_bs_enqueue_task(void *unused, struct rq *rq,
+			       struct task_struct *task, int flags)
+#else
 static void ax_bs_enqueue_task(void *unused, struct rq *rq,
 			       struct task_struct *task)
+#endif
 {
-	struct ax_bs_target *target = ax_bs_match_target(task);
-	unsigned int lock_util = ax_bs_lock_task_util(task);
-	unsigned int support_util = ax_bs_support_task_util(task);
+	struct ax_bs_target *launch_worker_target;
+	struct ax_bs_target *target;
+	unsigned int auto_top_app_util;
+	unsigned int launch_worker_util;
+	unsigned int lock_util;
+	unsigned int support_util;
+
+#if defined(AX_BS_ENQUEUE_TASK_HAS_FLAGS)
+	(void)flags;
+#endif
+	launch_worker_target = ax_bs_match_launch_worker_target(task);
+	auto_top_app_util = ax_bs_auto_top_app_task_util(task);
+	launch_worker_util = ax_bs_launch_worker_util_for(launch_worker_target);
+	lock_util = ax_bs_lock_task_util(task);
+	support_util = ax_bs_support_task_util(task);
+
+	ax_bs_match_target_util(task, &target, NULL);
+
+#if defined(AX_BS_HAS_MAP_UTIL_FREQ)
+	if (target)
+		ax_bs_note_target_cpu(target, task, task_cpu(task));
+	if (auto_top_app_util)
+		ax_bs_note_auto_cpu(task, task_cpu(task));
+#endif
 
 #if defined(AX_BS_HAS_FRAME_BOOST)
-	if (ax_bs_needs_frame_rescue(task))
+	if (ax_frame_boost_task_util(task))
 		ax_frame_boost_enqueue_task(task);
 #endif
 
-	if (target || lock_util || support_util)
+	if (target || auto_top_app_util || launch_worker_util || lock_util || support_util)
 		atomic64_inc(&ax_bs_enqueue_events);
-	ax_bs_note_wakeup(target);
+	ax_bs_note_wakeup(target ? target : launch_worker_target, task,
+			  launch_worker_util != 0,
+			  launch_worker_util != 0);
 }
 
+#if defined(AX_BS_DEQUEUE_TASK_HAS_FLAGS)
+static void ax_bs_dequeue_task(void *unused, struct rq *rq,
+			       struct task_struct *task, int flags)
+#else
 static void ax_bs_dequeue_task(void *unused, struct rq *rq,
 			       struct task_struct *task)
+#endif
 {
-	struct ax_bs_target *target = ax_bs_match_target(task);
+	struct ax_bs_target *launch_worker_target =
+		ax_bs_match_launch_worker_target(task);
+	struct ax_bs_target *target;
+	unsigned int launch_worker_util =
+		ax_bs_launch_worker_util_for(launch_worker_target);
+	unsigned int auto_top_app_util = ax_bs_auto_top_app_task_util(task);
 	unsigned int lock_util = ax_bs_lock_task_util(task);
 	unsigned int support_util = ax_bs_support_task_util(task);
 
+#if defined(AX_BS_DEQUEUE_TASK_HAS_FLAGS)
+	(void)flags;
+#endif
+	ax_bs_match_target_util(task, &target, NULL);
+
 #if defined(AX_BS_HAS_FRAME_BOOST)
-	if (ax_bs_needs_frame_rescue(task))
+	if (ax_frame_boost_task_util(task))
 		ax_frame_boost_dequeue_task(task);
 #endif
 
@@ -3581,11 +4847,13 @@ static void ax_bs_dequeue_task(void *unused, struct rq *rq,
 		atomic64_inc(&target->hits);
 		atomic64_inc(&ax_bs_dequeue_events);
 	}
+	if (launch_worker_util)
+		atomic64_inc(&launch_worker_target->hits);
 #if defined(AX_BS_HAS_LOCK_BOOST)
 	if (lock_util)
 		atomic64_inc(&ax_bs_lock_hits);
 #endif
-	if ((lock_util || support_util) && !target)
+	if ((auto_top_app_util || launch_worker_util || lock_util || support_util) && !target)
 		atomic64_inc(&ax_bs_dequeue_events);
 }
 
@@ -3595,6 +4863,8 @@ static void ax_bs_uclamp_eff_get(void *unused, struct task_struct *task,
 				 struct uclamp_se *uclamp_max,
 				 struct uclamp_se *uclamp_eff, int *ret)
 {
+	struct ax_bs_target *launch_worker_target;
+	unsigned int launch_worker_util;
 	unsigned int lock_util;
 	unsigned int game_util = 0;
 	unsigned int support_util;
@@ -3604,7 +4874,7 @@ static void ax_bs_uclamp_eff_get(void *unused, struct task_struct *task,
 		return;
 
 #if defined(AX_BS_HAS_FRAME_BOOST)
-	if (ax_bs_needs_frame_rescue(task)) {
+	if (ax_frame_boost_task_util(task)) {
 		ax_frame_boost_uclamp_eff_get(task, clamp_id, uclamp_max,
 					      uclamp_eff, ret);
 		if (*ret)
@@ -3617,12 +4887,16 @@ static void ax_bs_uclamp_eff_get(void *unused, struct task_struct *task,
 		return;
 #endif
 
-	util = ax_bs_target_util(ax_bs_match_target(task));
+	util = ax_bs_match_target_util(task, NULL, NULL);
+	util = max_t(unsigned int, util, ax_bs_auto_top_app_task_util(task));
+	launch_worker_target = ax_bs_match_launch_worker_target(task);
+	launch_worker_util = ax_bs_launch_worker_util_for(launch_worker_target);
 	lock_util = ax_bs_lock_task_util(task);
 	support_util = ax_bs_support_task_util(task);
 #if defined(AX_BS_HAS_GAME_BOOST)
 	game_util = ax_game_boost_task_util(task);
 #endif
+	util = max_t(unsigned int, util, launch_worker_util);
 	util = max_t(unsigned int, util, lock_util);
 	util = max_t(unsigned int, util, support_util);
 	util = max_t(unsigned int, util, game_util);
@@ -3642,6 +4916,8 @@ static void ax_bs_uclamp_eff_get(void *unused, struct task_struct *task,
 		atomic64_inc(&ax_bs_lock_uclamp_assists);
 	}
 #endif
+	if (launch_worker_util)
+		atomic64_inc(&launch_worker_target->hits);
 	if (support_util)
 		atomic64_inc(&ax_bs_support_worker_assists);
 	atomic64_inc(&ax_bs_uclamp_assists);
@@ -3650,30 +4926,57 @@ static void ax_bs_uclamp_eff_get(void *unused, struct task_struct *task,
 #endif
 
 #if defined(AX_BS_HAS_MAP_UTIL_FREQ)
-static unsigned long ax_bs_active_util(void)
+static unsigned long ax_bs_active_util(struct cpufreq_policy *policy)
 {
+	struct ax_bs_auto_state state;
+	unsigned long util;
+
 	if (!READ_ONCE(ax_bs_enabled) || !READ_ONCE(ax_bs_freq_assist))
 		return 0;
 
-	return ax_bs_active_scene_util();
+	util = ax_bs_active_target_util(policy);
+	if (!ax_bs_read_active_auto_state(&state))
+		return util;
+
+	if (ax_bs_policy_matches_cpu(policy, state.cpu))
+		util = max_t(unsigned long, util,
+			     ax_bs_auto_target_util_for(&state));
+
+	return util;
 }
 
 static void ax_bs_map_util_freq(void *unused, unsigned long util,
 				unsigned long freq, unsigned long cap,
-				unsigned long *next_freq)
+				unsigned long *next_freq
+#if defined(AX_BS_MAP_UTIL_HAS_POLICY)
+				, struct cpufreq_policy *policy
+#endif
+#if defined(AX_BS_MAP_UTIL_HAS_NEED_FREQ_UPDATE)
+				, bool *need_freq_update
+#endif
+				)
 {
 	unsigned long active_util;
 	unsigned long requested;
+	struct cpufreq_policy *active_policy = NULL;
+
+#if defined(AX_BS_MAP_UTIL_HAS_POLICY)
+	active_policy = policy;
+#endif
+#if defined(AX_BS_MAP_UTIL_HAS_NEED_FREQ_UPDATE)
+	(void)need_freq_update;
+#endif
 
 	if (!next_freq || !freq || !cap)
 		return;
 
 #if defined(AX_BS_HAS_FRAME_BOOST)
 	if (ax_frame_boost_active_util())
-		ax_frame_boost_map_util_freq(util, freq, cap, next_freq);
+		ax_frame_boost_map_util_freq(util, freq, cap, next_freq,
+					     active_policy);
 #endif
 
-	active_util = ax_bs_active_util();
+	active_util = ax_bs_active_util(active_policy);
 	if (!active_util)
 		return;
 
@@ -3950,6 +5253,33 @@ static int ax_bs_stats_show(struct seq_file *m, void *v)
 		   (long long)atomic64_read(&ax_bs_support_worker_assists));
 	seq_printf(m, "background_guard_assists %lld\n",
 		   (long long)atomic64_read(&ax_bs_background_guard_assists));
+#if defined(AX_BS_HAS_DYNAMIC_SVP_HOOK)
+	seq_printf(m, "dynamic_svp_hook %d\n",
+		   ax_bs_dynamic_svp_hook_registered ? 1 : 0);
+	seq_printf(m, "dynamic_svp_preempts %lld\n",
+		   (long long)atomic64_read(&ax_bs_dynamic_svp_preempts));
+#endif
+#if defined(AX_BS_HAS_CPU_CAPACITY_HOOK)
+	seq_printf(m, "cpu_capacity_hook %d\n",
+		   ax_bs_cpu_capacity_hook_registered ? 1 : 0);
+	seq_printf(m, "cpu_capacity_ready %d\n",
+		   ax_bs_cpu_topology_ready() ? 1 : 0);
+#endif
+#if defined(AX_BS_HAS_INPUT_HOOK)
+	seq_printf(m, "input_hook %d\n", ax_bs_input_hook_registered ? 1 : 0);
+#endif
+#if defined(AX_BS_HAS_IOLIMIT_HOOK)
+	seq_printf(m, "iolimit_hook %d\n",
+		   ax_bs_iolimit_hook_registered ? 1 : 0);
+	seq_printf(m, "io_limit_delays %lld\n",
+		   (long long)atomic64_read(&ax_bs_io_limit_delays));
+#endif
+#if defined(AX_BS_HAS_GPU_CONTEXT_HOOK)
+	seq_printf(m, "gpu_context_hook %d\n",
+		   ax_bs_gpu_context_hook_registered ? 1 : 0);
+	seq_printf(m, "gpu_context_boosts %lld\n",
+		   (long long)atomic64_read(&ax_bs_gpu_context_boosts));
+#endif
 #if defined(AX_BS_HAS_LOCK_BOOST)
 	seq_printf(m, "lock_assists %lld\n",
 		   (long long)atomic64_read(&ax_bs_lock_assists));
@@ -4157,10 +5487,96 @@ static void ax_svp_release_all(void)
 }
 #endif
 
+static void ax_bs_register_optional_hooks(void)
+{
+#if defined(AX_BS_HAS_INPUT_HOOK)
+	if (!register_trace_android_vh_input_sync(ax_bs_input_sync, NULL))
+		ax_bs_input_hook_registered = true;
+#endif
+#if defined(AX_BS_HAS_CPU_CAPACITY_HOOK)
+	if (!register_trace_android_rvh_update_cpu_capacity(ax_bs_update_cpu_capacity,
+							    NULL))
+		ax_bs_cpu_capacity_hook_registered = true;
+#endif
+#if defined(AX_BS_HAS_DYNAMIC_SVP_HOOK)
+	if (!register_trace_android_vh_dynamic_svp_preempt(ax_bs_dynamic_svp_preempt,
+							   NULL))
+		ax_bs_dynamic_svp_hook_registered = true;
+#endif
+#if defined(AX_BS_HAS_IOLIMIT_HOOK)
+	if (READ_ONCE(ax_bs_io_limit_delay_ms) &&
+	    !register_trace_android_vh_iolimit_rw(ax_bs_iolimit_rw, NULL))
+		ax_bs_iolimit_hook_registered = true;
+#endif
+#if defined(AX_BS_HAS_GPU_CONTEXT_HOOK)
+	if (!register_trace_android_vh_gpu_context_create(ax_bs_gpu_context_create,
+							  NULL))
+		ax_bs_gpu_context_hook_registered = true;
+#endif
+}
+
+static void ax_bs_unregister_optional_hooks(void)
+{
+#if defined(AX_BS_HAS_INPUT_HOOK)
+	if (ax_bs_input_hook_registered) {
+		unsigned long flags;
+
+		ax_sched_unregister_hook(android_vh_input_sync, ax_bs_input_sync,
+					 NULL);
+		raw_spin_lock_irqsave(&ax_bs_auto_lock, flags);
+		write_seqcount_begin(&ax_bs_auto_seq);
+		WRITE_ONCE(ax_bs_input_hook_registered, false);
+		WRITE_ONCE(ax_bs_auto_state.input_until, 0);
+		WRITE_ONCE(ax_bs_auto_state.owner_until, 0);
+		WRITE_ONCE(ax_bs_auto_state.max_until, 0);
+		WRITE_ONCE(ax_bs_auto_state.tgid, -1);
+		WRITE_ONCE(ax_bs_auto_state.cpu, AX_SCHED_CPU_NONE);
+		WRITE_ONCE(ax_bs_auto_state.systemui, false);
+		write_seqcount_end(&ax_bs_auto_seq);
+		raw_spin_unlock_irqrestore(&ax_bs_auto_lock, flags);
+	}
+#endif
+#if defined(AX_BS_HAS_CPU_CAPACITY_HOOK)
+	if (ax_bs_cpu_capacity_hook_registered) {
+		ax_sched_unregister_hook(android_rvh_update_cpu_capacity,
+					 ax_bs_update_cpu_capacity, NULL);
+		WRITE_ONCE(ax_bs_cpu_capacity_hook_registered, false);
+		WRITE_ONCE(ax_bs_cpu_capacity_ready, false);
+	}
+#endif
+#if defined(AX_BS_HAS_DYNAMIC_SVP_HOOK)
+	if (ax_bs_dynamic_svp_hook_registered) {
+		ax_sched_unregister_hook(android_vh_dynamic_svp_preempt,
+					 ax_bs_dynamic_svp_preempt, NULL);
+		ax_bs_dynamic_svp_hook_registered = false;
+	}
+#endif
+#if defined(AX_BS_HAS_IOLIMIT_HOOK)
+	if (ax_bs_iolimit_hook_registered) {
+		ax_sched_unregister_hook(android_vh_iolimit_rw,
+					 ax_bs_iolimit_rw, NULL);
+		ax_bs_iolimit_hook_registered = false;
+	}
+#endif
+#if defined(AX_BS_HAS_GPU_CONTEXT_HOOK)
+	if (ax_bs_gpu_context_hook_registered) {
+		ax_sched_unregister_hook(android_vh_gpu_context_create,
+					 ax_bs_gpu_context_create, NULL);
+		ax_bs_gpu_context_hook_registered = false;
+	}
+#endif
+}
+
 static int __init ax_burst_sched_init(void)
 {
 	int ret;
+	int i;
 
+	for (i = 0; i < AX_BS_MAX_TARGETS; i++) {
+		seqcount_init(&ax_bs_targets[i].cpu_seq);
+		WRITE_ONCE(ax_bs_targets[i].pid, -1);
+		WRITE_ONCE(ax_bs_targets[i].cpu, AX_SCHED_CPU_NONE);
+	}
 	ax_bs_init_cpu_scores();
 	INIT_DELAYED_WORK(&ax_bs_cleanup_work, ax_bs_cleanup_work_fn);
 	INIT_DELAYED_WORK(&ax_bs_io_guard_work, ax_bs_io_guard_work_fn);
@@ -4172,9 +5588,13 @@ static int __init ax_burst_sched_init(void)
 	if (ret)
 		return ret;
 
+	ax_bs_register_optional_hooks();
+
 #if defined(AX_BS_HAS_LOCK_BOOST)
 	ret = register_trace_android_vh_rwsem_wake(ax_bs_rwsem_wake, NULL);
 	if (ret) {
+		ax_bs_unregister_optional_hooks();
+		tracepoint_synchronize_unregister();
 		ax_bs_remove_proc();
 		return ret;
 	}
@@ -4208,6 +5628,7 @@ static int __init ax_burst_sched_init(void)
 		goto unregister_rwsem_write_finished;
 #endif
 #else
+		ax_bs_unregister_optional_hooks();
 		tracepoint_synchronize_unregister();
 		ax_bs_remove_proc();
 		return ret;
@@ -4304,6 +5725,7 @@ unregister_rwsem_write_finished:
 unregister_rwsem_wake:
 	ax_sched_unregister_hook(android_vh_rwsem_wake, ax_bs_rwsem_wake, NULL);
 #endif
+	ax_bs_unregister_optional_hooks();
 	tracepoint_synchronize_unregister();
 	ax_bs_remove_proc();
 	return ret;
@@ -4326,6 +5748,7 @@ static void __exit ax_burst_sched_exit(void)
 
 	cancel_delayed_work_sync(&ax_bs_cleanup_work);
 	ax_bs_release_io_guards();
+	ax_bs_unregister_optional_hooks();
 	ax_sched_unregister_hook(android_rvh_can_migrate_task,
 				 ax_bs_can_migrate_task, NULL);
 	ax_sched_unregister_hook(android_rvh_dequeue_task, ax_bs_dequeue_task, NULL);

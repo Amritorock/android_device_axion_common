@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025-2026 AxionOS
+
+obj-m += ax_thread_snooper/
+obj-m += ax_affinity_guard/
+obj-m += ax_boost/
+obj-m += ax_atcm/
+obj-m += ax_game_boost/
+obj-m += ax_frame_boost/
+obj-m += ax_burst_sched/
+obj-m += ax_binder_ux/

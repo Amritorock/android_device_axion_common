@@ -78,6 +78,8 @@
 #define AX_BOOST_LEVEL_LIGHT 1
 #define AX_BOOST_LEVEL_HEAVY 2
 
+struct cpufreq_policy;
+
 static inline bool ax_sched_comm_has_prefix(const char *comm, const char *prefix,
 					    size_t len)
 {
@@ -180,30 +182,25 @@ void ax_game_boost_update(pid_t pid, unsigned int profile,
 void ax_game_boost_clear(pid_t pid);
 unsigned int ax_frame_boost_active_util(void);
 unsigned int ax_frame_boost_task_util(struct task_struct *task);
-bool ax_frame_boost_pick_task_rq(struct task_struct *task,
-				 struct ax_sched_cpu_pick *pick);
-bool ax_frame_boost_pick_fallback_rq(int prev_cpu, struct task_struct *task,
-				     struct ax_sched_cpu_pick *pick);
-bool ax_frame_boost_pick_lowest_rq(struct task_struct *task,
-				   struct cpumask *local_cpu_mask,
-				   struct ax_sched_cpu_pick *pick);
+void ax_frame_boost_note_cpu(struct task_struct *task, int cpu);
 void ax_frame_boost_enqueue_task(struct task_struct *task);
 void ax_frame_boost_dequeue_task(struct task_struct *task);
 void ax_frame_boost_map_util_freq(unsigned long util, unsigned long freq,
 				  unsigned long cap,
-				  unsigned long *next_freq);
+				  unsigned long *next_freq,
+				  struct cpufreq_policy *policy);
 #if defined(CONFIG_UCLAMP_TASK)
 void ax_frame_boost_uclamp_eff_get(struct task_struct *task,
 				   enum uclamp_id clamp_id,
 				   struct uclamp_se *uclamp_max,
 				   struct uclamp_se *uclamp_eff, int *ret);
 #endif
-#if defined(AX_SCHED_HAS_BOOST)
 void ax_boost_kick(unsigned int source, unsigned int level, unsigned int resources,
 		   unsigned int duration_ms);
 void ax_boost_clear(unsigned int source);
 void ax_boost_set_ceiling(unsigned int resources, unsigned int level);
 
+#if defined(AX_SCHED_HAS_BOOST)
 static inline void ax_sched_boost(unsigned int source, unsigned int level,
 				  unsigned int resources,
 				  unsigned int duration_ms)
@@ -246,9 +243,9 @@ static inline void ax_sched_boost_ceiling(unsigned int resources, unsigned int l
 }
 #endif
 
-#if defined(AX_SCHED_HAS_THREAD_SNOOPER)
 void ax_thread_snooper_track(pid_t pid, bool enabled);
 
+#if defined(AX_SCHED_HAS_THREAD_SNOOPER)
 static inline void ax_sched_thread_snooper_track(pid_t pid, bool enabled)
 {
 	ax_thread_snooper_track(pid, enabled);

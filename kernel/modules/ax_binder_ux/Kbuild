@@ -1,0 +1,28 @@
+include $(src)/../axion_modules.mk
+
+ifeq ($(axion_binder_ux),y)
+obj-m += ax_binder_ux.o
+ccflags-y += -I$(srctree)/drivers/android
+ccflags-y += -I$(abspath $(kbuild-dir)/../include)
+ifeq ($(CONFIG_UCLAMP_TASK),y)
+axion_binder_uclamp_hook := $(call axion_has_export,__tracepoint_android_rvh_uclamp_eff_value)
+axion_binder_uclamp_enable := $(call axion_has_export,android_uclamp_enable)
+axion_binder_uclamp_refresh := $(call axion_has_export,android_uclamp_update_active)
+ifneq ($(and $(axion_binder_uclamp_hook),$(axion_binder_uclamp_enable),$(axion_binder_uclamp_refresh)),)
+ccflags-y += -DAX_BINDER_HAS_UCLAMP_EFF_HOOK
+endif
+endif
+ifeq ($(axion_burst_sched),y)
+ccflags-y += -DAX_BINDER_HAS_BURST_SCENE
+KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_burst_sched/Module.symvers))
+endif
+ifeq ($(axion_frame_boost),y)
+ccflags-y += -DAX_BINDER_HAS_FRAME_BOOST
+KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_frame_boost/Module.symvers))
+endif
+endif
+
+ifeq ($(axion_binder_obs),y)
+obj-m += ax_binder_obs.o
+ccflags-y += -I$(srctree)/drivers/android
+endif

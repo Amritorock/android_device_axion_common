@@ -7,7 +7,6 @@
 
 #include <linux/atomic.h>
 #include <linux/cpufreq.h>
-#include <linux/cpumask.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/math64.h>
@@ -16,6 +15,7 @@
 #include <linux/sched.h>
 #include <linux/sched/topology.h>
 #include <linux/seq_file.h>
+#include <linux/seqlock.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
@@ -35,8 +35,6 @@
 #define AX_FB_DEFAULT_HEAVY_UTIL 896
 #define AX_FB_DEFAULT_UTIL_CAP 960
 #define AX_FB_DEFAULT_MAX_DURATION_MS 1600
-#define AX_FB_DEFAULT_SPREAD_WINDOW_MS 12
-#define AX_FB_CPU_PRESSURE_MAX 8
 #define AX_FB_SCORE_MAX 255
 #define AX_FB_LIGHT_SCORE 72
 #define AX_FB_HEAVY_SCORE 160
@@ -63,18 +61,6 @@ module_param_named(util_cap, ax_fb_util_cap, uint, 0644);
 static unsigned int ax_fb_max_duration_ms = AX_FB_DEFAULT_MAX_DURATION_MS;
 module_param_named(max_duration_ms, ax_fb_max_duration_ms, uint, 0644);
 
-static unsigned int ax_fb_big_only = 1;
-module_param_named(big_only, ax_fb_big_only, uint, 0644);
-
-static unsigned int ax_fb_fallback_big = 1;
-module_param_named(fallback_big, ax_fb_fallback_big, uint, 0644);
-
-static unsigned int ax_fb_spread_active = 1;
-module_param_named(spread_active, ax_fb_spread_active, uint, 0644);
-
-static unsigned int ax_fb_spread_window_ms = AX_FB_DEFAULT_SPREAD_WINDOW_MS;
-module_param_named(spread_window_ms, ax_fb_spread_window_ms, uint, 0644);
-
 static unsigned int ax_fb_frame_score_gain = AX_FB_DEFAULT_FRAME_SCORE_GAIN;
 module_param_named(frame_score_gain, ax_fb_frame_score_gain, uint, 0644);
 
@@ -87,8 +73,10 @@ module_param_named(freq_assist, ax_fb_freq_assist, uint, 0644);
 #endif
 
 static DEFINE_RAW_SPINLOCK(ax_fb_lock);
+static seqcount_t ax_fb_state_seq = SEQCNT_ZERO(ax_fb_state_seq);
 static struct proc_dir_entry *ax_fb_proc_dir;
 static pid_t ax_fb_pid = -1;
+static int ax_fb_cpu = AX_SCHED_CPU_NONE;
 static int ax_fb_uid = -1;
 static int ax_fb_level;
 static int ax_fb_source;
@@ -98,14 +86,8 @@ static unsigned int ax_fb_score;
 static unsigned long ax_fb_expire_jiffies;
 static int ax_fb_tid_count;
 static pid_t ax_fb_tids[AX_FB_MAX_TIDS];
-static unsigned int ax_fb_cpu_score[NR_CPUS];
-static atomic_t ax_fb_cpu_pressure[NR_CPUS];
-static unsigned long ax_fb_cpu_pressure_jiffies[NR_CPUS];
 static atomic64_t ax_fb_updates;
 static atomic64_t ax_fb_clears;
-static atomic64_t ax_fb_wake_assists;
-static atomic64_t ax_fb_fallback_assists;
-static atomic64_t ax_fb_lowest_assists;
 static atomic64_t ax_fb_uclamp_assists;
 static atomic64_t ax_fb_enqueue_events;
 static atomic64_t ax_fb_dequeue_events;
@@ -250,163 +232,22 @@ unsigned int ax_frame_boost_task_util(struct task_struct *task)
 }
 EXPORT_SYMBOL_GPL(ax_frame_boost_task_util);
 
-static unsigned int ax_fb_get_cpu_score(int cpu)
+void ax_frame_boost_note_cpu(struct task_struct *task, int cpu)
 {
-	unsigned int score = READ_ONCE(ax_fb_cpu_score[cpu]);
+	unsigned long flags;
 
-	return score ? score : cpu + 1;
-}
-
-static unsigned int ax_fb_cpu_pressure_score(int cpu)
-{
-	unsigned int pressure = atomic_read(&ax_fb_cpu_pressure[cpu]);
-	unsigned long last = READ_ONCE(ax_fb_cpu_pressure_jiffies[cpu]);
-	unsigned long window;
-
-	if (!READ_ONCE(ax_fb_spread_active) || !pressure)
-		return 0;
-
-	window = max_t(unsigned long,
-		       msecs_to_jiffies(max_t(unsigned int,
-					      READ_ONCE(ax_fb_spread_window_ms),
-					      1)),
-		       1);
-	if (time_after_eq(jiffies, last + window)) {
-		atomic_set(&ax_fb_cpu_pressure[cpu], 0);
-		return 0;
-	}
-
-	return min_t(unsigned int, pressure, AX_FB_CPU_PRESSURE_MAX);
-}
-
-static void ax_fb_note_cpu_pick(int cpu)
-{
-	unsigned int pressure;
-
-	if (!READ_ONCE(ax_fb_spread_active))
+	if (!task || cpu < 0 || cpu >= nr_cpu_ids || !ax_fb_task_util(task))
 		return;
 
-	WRITE_ONCE(ax_fb_cpu_pressure_jiffies[cpu], jiffies);
-	pressure = atomic_read(&ax_fb_cpu_pressure[cpu]);
-	if (pressure < AX_FB_CPU_PRESSURE_MAX)
-		atomic_inc(&ax_fb_cpu_pressure[cpu]);
-}
-
-static void ax_fb_init_cpu_scores(void)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		struct cpufreq_policy *policy;
-		unsigned int score = cpu + 1;
-
-		policy = cpufreq_cpu_get(cpu);
-		if (policy) {
-			score = max_t(unsigned int, policy->cpuinfo.max_freq,
-				      policy->max);
-			cpufreq_cpu_put(policy);
-		}
-
-		WRITE_ONCE(ax_fb_cpu_score[cpu], score ? score : cpu + 1);
-		atomic_set(&ax_fb_cpu_pressure[cpu], 0);
-		WRITE_ONCE(ax_fb_cpu_pressure_jiffies[cpu], 0);
+	raw_spin_lock_irqsave(&ax_fb_lock, flags);
+	if (ax_fb_task_util(task)) {
+		write_seqcount_begin(&ax_fb_state_seq);
+		WRITE_ONCE(ax_fb_cpu, cpu);
+		write_seqcount_end(&ax_fb_state_seq);
 	}
+	raw_spin_unlock_irqrestore(&ax_fb_lock, flags);
 }
-
-static int ax_fb_best_cpu_mask(struct task_struct *task,
-			       struct cpumask *local_cpu_mask)
-{
-	unsigned int best_score = 0;
-	unsigned int best_pressure = ~0U;
-	int best_cpu = -1;
-	int cpu;
-
-	for_each_online_cpu(cpu) {
-		unsigned int pressure;
-		unsigned int score;
-
-		if (!cpumask_test_cpu(cpu, task->cpus_ptr))
-			continue;
-		if (local_cpu_mask && !cpumask_test_cpu(cpu, local_cpu_mask))
-			continue;
-
-		score = ax_fb_get_cpu_score(cpu);
-		pressure = ax_fb_cpu_pressure_score(cpu);
-		if (score > best_score ||
-		    (score == best_score && pressure <= best_pressure)) {
-			best_score = score;
-			best_pressure = pressure;
-			best_cpu = cpu;
-		}
-	}
-
-	return best_cpu;
-}
-
-static int ax_fb_pick_cpu(struct task_struct *task,
-			  struct cpumask *local_cpu_mask)
-{
-	int cpu = ax_fb_best_cpu_mask(task, local_cpu_mask);
-
-	if (cpu >= 0)
-		ax_fb_note_cpu_pick(cpu);
-
-	return cpu;
-}
-
-bool ax_frame_boost_pick_task_rq(struct task_struct *task,
-				 struct ax_sched_cpu_pick *pick)
-{
-	int cpu;
-
-	if (!pick || !READ_ONCE(ax_fb_big_only) || !ax_fb_task_util(task))
-		return false;
-
-	cpu = ax_fb_pick_cpu(task, NULL);
-	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_FRAME))
-		return false;
-
-	atomic64_inc(&ax_fb_wake_assists);
-	return true;
-}
-EXPORT_SYMBOL_GPL(ax_frame_boost_pick_task_rq);
-
-bool ax_frame_boost_pick_fallback_rq(int prev_cpu, struct task_struct *task,
-				     struct ax_sched_cpu_pick *pick)
-{
-	int cpu;
-
-	if (!pick || !READ_ONCE(ax_fb_fallback_big) || !ax_fb_task_util(task))
-		return false;
-
-	cpu = ax_fb_pick_cpu(task, NULL);
-	if (cpu == prev_cpu ||
-	    !ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_FRAME))
-		return false;
-
-	atomic64_inc(&ax_fb_fallback_assists);
-	return true;
-}
-EXPORT_SYMBOL_GPL(ax_frame_boost_pick_fallback_rq);
-
-bool ax_frame_boost_pick_lowest_rq(struct task_struct *task,
-				   struct cpumask *local_cpu_mask,
-				   struct ax_sched_cpu_pick *pick)
-{
-	int cpu;
-
-	if (!pick || !local_cpu_mask || !READ_ONCE(ax_fb_big_only) ||
-	    !ax_fb_task_util(task))
-		return false;
-
-	cpu = ax_fb_pick_cpu(task, local_cpu_mask);
-	if (!ax_sched_set_cpu_pick(pick, cpu, AX_SCHED_PRIO_FRAME))
-		return false;
-
-	atomic64_inc(&ax_fb_lowest_assists);
-	return true;
-}
-EXPORT_SYMBOL_GPL(ax_frame_boost_pick_lowest_rq);
+EXPORT_SYMBOL_GPL(ax_frame_boost_note_cpu);
 
 #if defined(AX_FB_HAS_UCLAMP_EFF_GET) && defined(CONFIG_UCLAMP_TASK)
 void ax_frame_boost_uclamp_eff_get(struct task_struct *task,
@@ -438,15 +279,13 @@ EXPORT_SYMBOL_GPL(ax_frame_boost_uclamp_eff_get);
 
 void ax_frame_boost_enqueue_task(struct task_struct *task)
 {
-	int cpu;
-
 	if (!task || !ax_fb_task_util(task))
 		return;
 
+#if defined(AX_FB_HAS_MAP_UTIL_FREQ)
+	ax_frame_boost_note_cpu(task, task_cpu(task));
+#endif
 	atomic64_inc(&ax_fb_enqueue_events);
-	cpu = task_cpu(task);
-	if (cpu >= 0 && cpu < nr_cpu_ids)
-		ax_fb_note_cpu_pick(cpu);
 }
 EXPORT_SYMBOL_GPL(ax_frame_boost_enqueue_task);
 
@@ -460,17 +299,33 @@ void ax_frame_boost_dequeue_task(struct task_struct *task)
 EXPORT_SYMBOL_GPL(ax_frame_boost_dequeue_task);
 
 #if defined(AX_FB_HAS_MAP_UTIL_FREQ)
-static unsigned long ax_fb_freq_util(void)
+static unsigned long ax_fb_freq_util(struct cpufreq_policy *policy)
 {
+	unsigned long util;
+	unsigned int seq;
+	int cpu;
+
 	if (!READ_ONCE(ax_fb_enabled) || !READ_ONCE(ax_fb_freq_assist))
 		return 0;
 
-	return ax_fb_active_util();
+	do {
+		seq = read_seqcount_begin(&ax_fb_state_seq);
+		util = ax_fb_active_util();
+		if (util && policy) {
+			cpu = READ_ONCE(ax_fb_cpu);
+			if (cpu < 0 || cpu >= nr_cpu_ids ||
+			    !cpumask_test_cpu(cpu, policy->related_cpus))
+				util = 0;
+		}
+	} while (read_seqcount_retry(&ax_fb_state_seq, seq));
+
+	return util;
 }
 
 void ax_frame_boost_map_util_freq(unsigned long util, unsigned long freq,
 				  unsigned long cap,
-				  unsigned long *next_freq)
+				  unsigned long *next_freq,
+				  struct cpufreq_policy *policy)
 {
 	unsigned long active_util;
 	unsigned long requested;
@@ -478,7 +333,7 @@ void ax_frame_boost_map_util_freq(unsigned long util, unsigned long freq,
 	if (!next_freq || !freq || !cap)
 		return;
 
-	active_util = ax_fb_freq_util();
+	active_util = ax_fb_freq_util(policy);
 	if (!active_util)
 		return;
 
@@ -499,7 +354,9 @@ static bool ax_fb_clear_locked(pid_t pid)
 
 	if (ax_fb_pid > 0)
 		atomic64_inc(&ax_fb_clears);
+	write_seqcount_begin(&ax_fb_state_seq);
 	ax_fb_pid = -1;
+	ax_fb_cpu = AX_SCHED_CPU_NONE;
 	ax_fb_uid = -1;
 	ax_fb_level = 0;
 	ax_fb_source = 0;
@@ -509,6 +366,7 @@ static bool ax_fb_clear_locked(pid_t pid)
 	ax_fb_expire_jiffies = 0;
 	ax_fb_tid_count = 0;
 	memset(ax_fb_tids, 0, sizeof(ax_fb_tids));
+	write_seqcount_end(&ax_fb_state_seq);
 	return true;
 }
 
@@ -595,6 +453,9 @@ static ssize_t ax_fb_boost_write(struct file *file, const char __user *buf,
 		delay = 1;
 
 	raw_spin_lock_irqsave(&ax_fb_lock, flags);
+	write_seqcount_begin(&ax_fb_state_seq);
+	if (ax_fb_pid != pid || !ax_fb_active_util())
+		ax_fb_cpu = AX_SCHED_CPU_NONE;
 	ax_fb_pid = pid;
 	ax_fb_uid = uid;
 	ax_fb_level = level;
@@ -617,6 +478,7 @@ static ssize_t ax_fb_boost_write(struct file *file, const char __user *buf,
 	ax_fb_actual_ns = actual_ns;
 	ax_fb_target_ns = target_ns;
 	ax_fb_score = ax_fb_score_for(level, source, actual_ns, target_ns);
+	write_seqcount_end(&ax_fb_state_seq);
 	atomic64_inc(&ax_fb_updates);
 	raw_spin_unlock_irqrestore(&ax_fb_lock, flags);
 
@@ -680,7 +542,7 @@ static int ax_fb_stats_show(struct seq_file *m, void *v)
 	unsigned int active_util = ax_fb_active_util();
 
 	seq_printf(m,
-		   "active=%u pid=%d uid=%d level=%d source=%d score=%u actual_ns=%llu target_ns=%llu updates=%lld clears=%lld wake_assists=%lld fallback_assists=%lld lowest_assists=%lld uclamp_assists=%lld enqueue_events=%lld dequeue_events=%lld",
+		   "active=%u pid=%d uid=%d level=%d source=%d score=%u actual_ns=%llu target_ns=%llu updates=%lld clears=%lld uclamp_assists=%lld enqueue_events=%lld dequeue_events=%lld",
 		   active_util ? 1 : 0,
 		   READ_ONCE(ax_fb_pid),
 		   READ_ONCE(ax_fb_uid),
@@ -691,9 +553,6 @@ static int ax_fb_stats_show(struct seq_file *m, void *v)
 		   (unsigned long long)READ_ONCE(ax_fb_target_ns),
 		   atomic64_read(&ax_fb_updates),
 		   atomic64_read(&ax_fb_clears),
-		   atomic64_read(&ax_fb_wake_assists),
-		   atomic64_read(&ax_fb_fallback_assists),
-		   atomic64_read(&ax_fb_lowest_assists),
 		   atomic64_read(&ax_fb_uclamp_assists),
 		   atomic64_read(&ax_fb_enqueue_events),
 		   atomic64_read(&ax_fb_dequeue_events));
@@ -770,7 +629,6 @@ static void ax_fb_remove_proc(void)
 
 static int __init ax_frame_boost_init(void)
 {
-	ax_fb_init_cpu_scores();
 	return ax_fb_create_proc();
 }
 

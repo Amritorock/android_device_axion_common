@@ -14,6 +14,20 @@
 #include <linux/interconnect.h>
 #include <dt-bindings/interconnect/qcom,holi.h>
 #endif
+#if defined(AX_BOOST_HAS_PIXEL_GPU_PROVIDER)
+#include <pixel_gpu_boost.h>
+#endif
+#if defined(AX_BOOST_HAS_EXYNOS_PROVIDER)
+#include <soc/google/exynos-devfreq.h>
+#include <soc/google/exynos_pm_qos.h>
+#if IS_ENABLED(CONFIG_SOC_GS101)
+#include <dt-bindings/soc/google/gs101-devfreq.h>
+#elif IS_ENABLED(CONFIG_SOC_GS201)
+#include <dt-bindings/soc/google/gs201-devfreq.h>
+#else
+#include <dt-bindings/soc/google/zuma-devfreq.h>
+#endif
+#endif
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/limits.h>
@@ -21,6 +35,17 @@
 #include <linux/mutex.h>
 #if defined(BOOST_HAS_PMQOS)
 #include <linux/pm_qos.h>
+#if defined(BOOST_HAS_CPU_LATENCY_QOS)
+#define boost_pmqos_add(request, value) \
+	cpu_latency_qos_add_request(request, value)
+#define boost_pmqos_update cpu_latency_qos_update_request
+#define boost_pmqos_remove cpu_latency_qos_remove_request
+#else
+#define boost_pmqos_add(request, value) \
+	pm_qos_add_request(request, PM_QOS_CPU_DMA_LATENCY, value)
+#define boost_pmqos_update pm_qos_update_request
+#define boost_pmqos_remove pm_qos_remove_request
+#endif
 #endif
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -138,6 +163,95 @@ static atomic64_t boost_pmqos_votes;
 static atomic64_t boost_provider_hits;
 static atomic64_t boost_provider_misses;
 
+#if defined(AX_BOOST_HAS_DEVFREQ_PROVIDER) || \
+	defined(AX_BOOST_HAS_PIXEL_GPU_PROVIDER) || \
+	defined(AX_BOOST_HAS_EXYNOS_PROVIDER)
+static unsigned int boost_freq_pct(unsigned int level)
+{
+	unsigned int pct;
+
+	if (level >= AX_BOOST_LEVEL_HEAVY)
+		pct = READ_ONCE(boost_devfreq_heavy_pct);
+	else
+		pct = READ_ONCE(boost_devfreq_light_pct);
+
+	return clamp_t(unsigned int, pct, 1, 100);
+}
+#endif
+
+#if defined(AX_BOOST_HAS_EXYNOS_PROVIDER)
+struct boost_exynos_vote {
+	struct exynos_pm_qos_request request;
+	unsigned int domain;
+	int qos_class;
+	bool added;
+};
+
+#if defined(AX_BOOST_HAS_MEMLAT_PROVIDER)
+static struct boost_exynos_vote boost_exynos_memlat = {
+	.domain = DEVFREQ_INT,
+	.qos_class = PM_QOS_DEVICE_THROUGHPUT,
+};
+#endif
+
+#if defined(AX_BOOST_HAS_DDR_PROVIDER)
+static struct boost_exynos_vote boost_exynos_ddr = {
+	.domain = DEVFREQ_MIF,
+	.qos_class = PM_QOS_BUS_THROUGHPUT,
+};
+#endif
+
+#if defined(AX_BOOST_HAS_EXYNOS_DSU_PROVIDER)
+static struct boost_exynos_vote boost_exynos_l3 = {
+	.domain = DEVFREQ_DSU,
+	.qos_class = PM_QOS_DSU_THROUGHPUT,
+};
+
+static struct boost_exynos_vote boost_exynos_bci = {
+	.domain = DEVFREQ_BCI,
+	.qos_class = PM_QOS_BCI_THROUGHPUT,
+};
+#endif
+
+static int boost_apply_exynos_vote(struct boost_exynos_vote *vote,
+				   unsigned int level)
+{
+	unsigned int max_freq;
+	unsigned int min_freq;
+	unsigned int target_freq = 0;
+	unsigned int pct;
+	int ret;
+
+	if (!vote->added)
+		return -ENODEV;
+	if (level) {
+		ret = exynos_devfreq_get_boundary(vote->domain, &max_freq, &min_freq);
+		if (ret)
+			return ret;
+		pct = boost_freq_pct(level);
+		target_freq = min_freq +
+			      (u64)(max_freq - min_freq) * pct / 100;
+	}
+
+	exynos_pm_qos_update_request(&vote->request, target_freq);
+	return 0;
+}
+
+static void boost_add_exynos_vote(struct boost_exynos_vote *vote)
+{
+	exynos_pm_qos_add_request(&vote->request, vote->qos_class, 0);
+	vote->added = true;
+}
+
+static void boost_remove_exynos_vote(struct boost_exynos_vote *vote)
+{
+	if (!vote->added)
+		return;
+	exynos_pm_qos_remove_request(&vote->request);
+	vote->added = false;
+}
+#endif
+
 #if defined(AX_BOOST_HAS_DEVFREQ_PROVIDER)
 struct boost_devfreq_target {
 	const char *name;
@@ -252,18 +366,6 @@ static struct devfreq *boost_find_devfreq(struct boost_devfreq_target *target)
 	return devfreq;
 }
 
-static unsigned int boost_devfreq_pct(unsigned int level)
-{
-	unsigned int pct;
-
-	if (level >= AX_BOOST_LEVEL_HEAVY)
-		pct = READ_ONCE(boost_devfreq_heavy_pct);
-	else
-		pct = READ_ONCE(boost_devfreq_light_pct);
-
-	return clamp_t(unsigned int, pct, 1, 100);
-}
-
 static unsigned long boost_devfreq_floor(struct devfreq *devfreq,
 					 unsigned int level)
 {
@@ -297,7 +399,7 @@ static unsigned long boost_devfreq_floor(struct devfreq *devfreq,
 		return 0;
 	}
 
-	pct = boost_devfreq_pct(level);
+	pct = boost_freq_pct(level);
 	target_freq = min_freq + (max_freq - min_freq) * pct / 100;
 	best_freq = max_freq;
 	if (profile && profile->freq_table && profile->max_state) {
@@ -485,6 +587,9 @@ int ax_boost_apply_gpu(unsigned int level, unsigned int duration_ms)
 
 	(void)duration_ms;
 	mutex_lock(&boost_provider_lock);
+#if defined(AX_BOOST_HAS_PIXEL_GPU_PROVIDER)
+	boost_merge_result(&ret, pixel_gpu_set_boost(level ? boost_freq_pct(level) : 0));
+#endif
 #if defined(AX_BOOST_HAS_DEVFREQ_PROVIDER)
 	boost_merge_result(&ret,
 			   boost_apply_devfreq_targets(boost_gpu_devfreq_targets,
@@ -509,6 +614,10 @@ int ax_boost_apply_memlat(unsigned int level, unsigned int duration_ms)
 
 	(void)duration_ms;
 	mutex_lock(&boost_provider_lock);
+#if defined(AX_BOOST_HAS_EXYNOS_PROVIDER) && \
+	defined(AX_BOOST_HAS_MEMLAT_PROVIDER)
+	boost_merge_result(&ret, boost_apply_exynos_vote(&boost_exynos_memlat, level));
+#endif
 #if defined(AX_BOOST_HAS_DEVFREQ_PROVIDER)
 	boost_merge_result(&ret,
 			   boost_apply_devfreq_targets(boost_memlat_devfreq_targets,
@@ -527,6 +636,10 @@ int ax_boost_apply_ddr(unsigned int level, unsigned int duration_ms)
 
 	(void)duration_ms;
 	mutex_lock(&boost_provider_lock);
+#if defined(AX_BOOST_HAS_EXYNOS_PROVIDER) && \
+	defined(AX_BOOST_HAS_DDR_PROVIDER)
+	boost_merge_result(&ret, boost_apply_exynos_vote(&boost_exynos_ddr, level));
+#endif
 #if defined(AX_BOOST_HAS_DEVFREQ_PROVIDER)
 	boost_merge_result(&ret,
 			   boost_apply_devfreq_targets(boost_ddr_devfreq_targets,
@@ -551,6 +664,10 @@ int ax_boost_apply_l3(unsigned int level, unsigned int duration_ms)
 
 	(void)duration_ms;
 	mutex_lock(&boost_provider_lock);
+#if defined(AX_BOOST_HAS_EXYNOS_DSU_PROVIDER)
+	boost_merge_result(&ret, boost_apply_exynos_vote(&boost_exynos_l3, level));
+	boost_merge_result(&ret, boost_apply_exynos_vote(&boost_exynos_bci, level));
+#endif
 #if defined(AX_BOOST_HAS_DEVFREQ_PROVIDER)
 	boost_merge_result(&ret,
 			   boost_apply_devfreq_targets(boost_l3_devfreq_targets,
@@ -565,6 +682,21 @@ int ax_boost_apply_l3(unsigned int level, unsigned int duration_ms)
 static void boost_release_providers(void)
 {
 	mutex_lock(&boost_provider_lock);
+#if defined(AX_BOOST_HAS_PIXEL_GPU_PROVIDER)
+	pixel_gpu_set_boost(0);
+#endif
+#if defined(AX_BOOST_HAS_EXYNOS_PROVIDER)
+#if defined(AX_BOOST_HAS_MEMLAT_PROVIDER)
+	boost_remove_exynos_vote(&boost_exynos_memlat);
+#endif
+#if defined(AX_BOOST_HAS_DDR_PROVIDER)
+	boost_remove_exynos_vote(&boost_exynos_ddr);
+#endif
+#if defined(AX_BOOST_HAS_EXYNOS_DSU_PROVIDER)
+	boost_remove_exynos_vote(&boost_exynos_l3);
+	boost_remove_exynos_vote(&boost_exynos_bci);
+#endif
+#endif
 #if defined(AX_BOOST_HAS_DEVFREQ_PROVIDER)
 	boost_release_devfreq_targets(boost_gpu_devfreq_targets,
 				      ARRAY_SIZE(boost_gpu_devfreq_targets));
@@ -764,7 +896,7 @@ static void boost_release_pmqos(void)
 	if (!boost_pmqos_added || !boost_pmqos_active)
 		return;
 
-	pm_qos_update_request(&boost_pmqos_request, PM_QOS_DEFAULT_VALUE);
+	boost_pmqos_update(&boost_pmqos_request, PM_QOS_DEFAULT_VALUE);
 	boost_pmqos_active = false;
 #endif
 }
@@ -784,7 +916,7 @@ static void boost_apply_pmqos(unsigned int level)
 
 	latency_us = min_t(unsigned int, READ_ONCE(boost_pmqos_latency_us),
 			   INT_MAX);
-	pm_qos_update_request(&boost_pmqos_request, latency_us);
+	boost_pmqos_update(&boost_pmqos_request, latency_us);
 	boost_pmqos_active = true;
 	atomic64_inc(&boost_pmqos_votes);
 #else
@@ -1250,9 +1382,20 @@ static int __init boost_init(void)
 		WRITE_ONCE(boost_atcm_ceiling[i],
 			   AX_BOOST_LEVEL_HEAVY);
 #if defined(BOOST_HAS_PMQOS)
-	pm_qos_add_request(&boost_pmqos_request, PM_QOS_CPU_DMA_LATENCY,
-			   PM_QOS_DEFAULT_VALUE);
+	boost_pmqos_add(&boost_pmqos_request, PM_QOS_DEFAULT_VALUE);
 	boost_pmqos_added = true;
+#endif
+#if defined(AX_BOOST_HAS_EXYNOS_PROVIDER)
+#if defined(AX_BOOST_HAS_MEMLAT_PROVIDER)
+	boost_add_exynos_vote(&boost_exynos_memlat);
+#endif
+#if defined(AX_BOOST_HAS_DDR_PROVIDER)
+	boost_add_exynos_vote(&boost_exynos_ddr);
+#endif
+#if defined(AX_BOOST_HAS_EXYNOS_DSU_PROVIDER)
+	boost_add_exynos_vote(&boost_exynos_l3);
+	boost_add_exynos_vote(&boost_exynos_bci);
+#endif
 #endif
 
 	ret = boost_create_proc();
@@ -1278,7 +1421,7 @@ static void __exit boost_exit(void)
 	boost_release_providers();
 #if defined(BOOST_HAS_PMQOS)
 	if (boost_pmqos_added)
-		pm_qos_remove_request(&boost_pmqos_request);
+		boost_pmqos_remove(&boost_pmqos_request);
 #endif
 	boost_remove_proc();
 }

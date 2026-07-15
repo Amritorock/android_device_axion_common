@@ -1,0 +1,102 @@
+include $(src)/../axion_modules.mk
+
+ifeq ($(axion_boost),y)
+obj-m += ax_boost.o
+ccflags-y += -I$(abspath $(kbuild-dir)/../include)
+ifneq ($(wildcard $(srctree)/include/linux/pm_qos.h),)
+ccflags-y += -DBOOST_HAS_PMQOS
+ifneq ($(shell grep -s cpu_latency_qos_add_request $(srctree)/include/linux/pm_qos.h),)
+ccflags-y += -DBOOST_HAS_CPU_LATENCY_QOS
+endif
+endif
+boost_has_proc_ops := $(shell grep -q "struct proc_ops" \
+	$(srctree)/include/linux/proc_fs.h 2>/dev/null && echo y)
+boost_has_devfreq_provider := $(and \
+	$(call axion_has_export,devfreq_get_by_name),\
+	$(call axion_has_export,devfreq_set_min_freq),\
+	$(call axion_has_export,devfreq_put))
+boost_has_devfreq_min_helper := $(call axion_has_export,devfreq_get_min_freq)
+boost_has_qcom_holi_icc_provider := $(if \
+	$(wildcard $(srctree)/include/linux/interconnect.h),$(if \
+	$(wildcard $(srctree)/include/dt-bindings/interconnect/qcom,holi.h),y))
+boost_has_pixel_gpu_provider := $(call axion_has_export,pixel_gpu_set_boost)
+boost_has_exynos_provider := $(and \
+	$(call axion_has_export,exynos_devfreq_get_boundary),\
+	$(call axion_has_export,exynos_pm_qos_add_request_trace),\
+	$(call axion_has_export,exynos_pm_qos_update_request),\
+	$(call axion_has_export,exynos_pm_qos_remove_request))
+provider_enabled :=
+devfreq_enabled :=
+ifeq ($(boost_has_proc_ops),y)
+ccflags-y += -DBOOST_HAS_PROC_OPS
+endif
+ifeq ($(AXION_KERNEL_MODULES_AX_BOOST_GPU_PROVIDER),y)
+ifeq ($(boost_has_pixel_gpu_provider),y)
+ccflags-y += -DAX_BOOST_HAS_GPU_PROVIDER -DAX_BOOST_HAS_PIXEL_GPU_PROVIDER
+provider_enabled := y
+else
+ifeq ($(boost_has_devfreq_provider),y)
+ccflags-y += -DAX_BOOST_HAS_GPU_PROVIDER
+provider_enabled := y
+devfreq_enabled := y
+endif
+endif
+endif
+ifeq ($(AXION_KERNEL_MODULES_AX_BOOST_MEMLAT_PROVIDER),y)
+ifeq ($(boost_has_exynos_provider),y)
+ccflags-y += -DAX_BOOST_HAS_MEMLAT_PROVIDER -DAX_BOOST_HAS_EXYNOS_PROVIDER
+provider_enabled := y
+else
+ifeq ($(boost_has_devfreq_provider),y)
+ccflags-y += -DAX_BOOST_HAS_MEMLAT_PROVIDER
+provider_enabled := y
+devfreq_enabled := y
+endif
+endif
+endif
+ifeq ($(AXION_KERNEL_MODULES_AX_BOOST_DDR_PROVIDER),y)
+ifeq ($(boost_has_exynos_provider),y)
+ccflags-y += -DAX_BOOST_HAS_DDR_PROVIDER -DAX_BOOST_HAS_EXYNOS_PROVIDER
+provider_enabled := y
+else
+ifeq ($(boost_has_devfreq_provider),y)
+ccflags-y += -DAX_BOOST_HAS_DDR_PROVIDER
+provider_enabled := y
+devfreq_enabled := y
+endif
+endif
+endif
+ifeq ($(AXION_KERNEL_MODULES_AX_BOOST_L3_PROVIDER),y)
+ifeq ($(boost_has_exynos_provider),y)
+ifneq ($(filter y,$(CONFIG_SOC_ZUMA) $(CONFIG_SOC_ZUMAPRO)),)
+ccflags-y += -DAX_BOOST_HAS_L3_PROVIDER
+ccflags-y += -DAX_BOOST_HAS_EXYNOS_PROVIDER
+ccflags-y += -DAX_BOOST_HAS_EXYNOS_DSU_PROVIDER
+provider_enabled := y
+else
+ifeq ($(boost_has_devfreq_provider),y)
+ccflags-y += -DAX_BOOST_HAS_L3_PROVIDER
+provider_enabled := y
+devfreq_enabled := y
+endif
+endif
+else
+ifeq ($(boost_has_devfreq_provider),y)
+ccflags-y += -DAX_BOOST_HAS_L3_PROVIDER
+provider_enabled := y
+devfreq_enabled := y
+endif
+endif
+endif
+ifeq ($(devfreq_enabled),y)
+ccflags-y += -DAX_BOOST_HAS_DEVFREQ_PROVIDER
+ifeq ($(boost_has_devfreq_min_helper),y)
+ccflags-y += -DAX_BOOST_HAS_DEVFREQ_MIN_HELPER
+endif
+endif
+ifeq ($(provider_enabled),y)
+ifeq ($(boost_has_qcom_holi_icc_provider),y)
+ccflags-y += -DAX_BOOST_HAS_QCOM_HOLI_ICC_PROVIDER
+endif
+endif
+endif

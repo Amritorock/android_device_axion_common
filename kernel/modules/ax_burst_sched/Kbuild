@@ -1,0 +1,75 @@
+include $(src)/../axion_modules.mk
+
+ifeq ($(axion_burst_sched),y)
+obj-m += ax_burst_sched.o
+ccflags-y += -I$(abspath $(kbuild-dir)/../include)
+ax_bs_sched_hooks := $(srctree)/include/trace/hooks/sched.h
+ax_bs_find_lowest_rq_proto := $(shell sed -n '/android_rvh_find_lowest_rq/,/TP_ARGS/p' $(ax_bs_sched_hooks))
+ifneq ($(findstring int ret,$(ax_bs_find_lowest_rq_proto)),)
+ccflags-y += -DAX_BS_FIND_LOWEST_RQ_HAS_RET
+endif
+ax_bs_enqueue_task_proto := $(shell sed -n '/android_rvh_enqueue_task/,/TP_ARGS/p' $(ax_bs_sched_hooks))
+ifneq ($(findstring int flags,$(ax_bs_enqueue_task_proto)),)
+ccflags-y += -DAX_BS_ENQUEUE_TASK_HAS_FLAGS
+endif
+ax_bs_dequeue_task_proto := $(shell sed -n '/android_rvh_dequeue_task/,/TP_ARGS/p' $(ax_bs_sched_hooks))
+ifneq ($(findstring int flags,$(ax_bs_dequeue_task_proto)),)
+ccflags-y += -DAX_BS_DEQUEUE_TASK_HAS_FLAGS
+endif
+ifeq ($(axion_uclamp_eff),y)
+ccflags-y += -DAX_BS_HAS_UCLAMP_EFF_GET
+endif
+ifeq ($(axion_map_util_freq),y)
+ccflags-y += -DAX_BS_HAS_MAP_UTIL_FREQ
+ax_bs_map_util_proto := $(shell sed -n '/android_vh_map_util_freq/,/TP_ARGS/p' $(ax_bs_sched_hooks))
+ifneq ($(findstring struct cpufreq_policy,$(ax_bs_map_util_proto)),)
+ccflags-y += -DAX_BS_MAP_UTIL_HAS_POLICY
+endif
+ifneq ($(findstring need_freq_update,$(ax_bs_map_util_proto)),)
+ccflags-y += -DAX_BS_MAP_UTIL_HAS_NEED_FREQ_UPDATE
+endif
+endif
+ifeq ($(axion_boost),y)
+ccflags-y += -DAX_SCHED_HAS_BOOST
+KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_boost/Module.symvers))
+endif
+ifeq ($(axion_thread_snooper),y)
+ccflags-y += -DAX_SCHED_HAS_THREAD_SNOOPER
+KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_thread_snooper/Module.symvers))
+endif
+ifeq ($(axion_frame_boost),y)
+ccflags-y += -DAX_BS_HAS_FRAME_BOOST
+KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_frame_boost/Module.symvers))
+endif
+ifeq ($(axion_game_boost),y)
+ccflags-y += -DAX_BS_HAS_GAME_BOOST
+KBUILD_EXTRA_SYMBOLS += $(wildcard $(abspath $(src)/../ax_game_boost/Module.symvers))
+endif
+ifeq ($(axion_burst_svp),y)
+ccflags-y += -DAX_BS_HAS_SVP_POLICY
+endif
+ifneq ($(wildcard $(srctree)/include/trace/hooks/rwsem.h),)
+ccflags-y += -DAX_BS_HAS_RWSEM_HOOK
+ifneq ($(wildcard $(srctree)/include/trace/hooks/dtask.h),)
+ccflags-y += -DAX_BS_HAS_MUTEX_HOOK
+endif
+endif
+ifeq ($(call axion_has_export,__tracepoint_android_vh_dynamic_svp_preempt),y)
+ccflags-y += -DAX_BS_HAS_DYNAMIC_SVP_HOOK
+endif
+ifeq ($(call axion_has_export,__tracepoint_android_rvh_update_cpu_capacity),y)
+ccflags-y += -DAX_BS_HAS_CPU_CAPACITY_HOOK
+endif
+ifeq ($(call axion_has_export,__tracepoint_android_vh_input_sync),y)
+ccflags-y += -DAX_BS_HAS_INPUT_HOOK
+endif
+ifeq ($(call axion_has_export,__tracepoint_android_vh_iolimit_rw),y)
+ccflags-y += -DAX_BS_HAS_IOLIMIT_HOOK
+endif
+ifeq ($(call axion_has_export,__tracepoint_android_vh_gpu_context_create),y)
+ccflags-y += -DAX_BS_HAS_GPU_CONTEXT_HOOK
+endif
+ifeq ($(call axion_has_export,set_task_ioprio),y)
+ccflags-y += -DAX_BS_HAS_IOPRIO
+endif
+endif
