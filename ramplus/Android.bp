@@ -1,0 +1,29 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "ax_ram_plus_setup",
+    srcs: ["ax_ram_plus_setup.cpp"],
+    shared_libs: [
+        "libbase",
+        "liblog",
+    ],
+    init_rc: ["init.axion.ramplus.rc"],
+    system_ext_specific: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+    ],
+}
+
+cc_library_static {
+    name: "liblmkdhooks",
+    srcs: ["lmkd/ram_plus_lmkd_hooks.cpp"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+    ],
+}

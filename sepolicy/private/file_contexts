@@ -1,0 +1,5 @@
+# Copyright 2025-2026 AxionOS
+# SPDX-License-Identifier: Apache-2.0
+
+/system_ext/bin/ax_ram_plus_setup                  u:object_r:ax_ram_plus_exec:s0
+/data/system/axion_ram_plus(/.*)?                 u:object_r:ax_ram_plus_data_file:s0

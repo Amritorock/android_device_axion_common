@@ -1,0 +1,27 @@
+# Copyright 2025-2026 AxionOS
+# SPDX-License-Identifier: Apache-2.0
+
+type ax_ram_plus, domain;
+typeattribute ax_ram_plus coredomain;
+type ax_ram_plus_exec, system_file_type, exec_type, file_type;
+type ax_ram_plus_data_file, file_type, data_file_type, core_data_file_type;
+
+init_daemon_domain(ax_ram_plus)
+
+allow ax_ram_plus system_data_file:dir { add_name search write };
+type_transition ax_ram_plus system_data_file:dir ax_ram_plus_data_file "axion_ram_plus";
+allow ax_ram_plus ax_ram_plus_data_file:dir create_dir_perms;
+allow ax_ram_plus ax_ram_plus_data_file:file create_file_perms;
+allow ax_ram_plus proc_overcommit_memory:file r_file_perms;
+allow ax_ram_plus proc_swaps:file r_file_perms;
+allow ax_ram_plus toolbox_exec:file rx_file_perms;
+allow ax_ram_plus self:capability sys_admin;
+
+set_prop(ax_ram_plus, system_prop)
+get_prop(ax_ram_plus, vold_prop)
+allow lmkd proc_swaps:file r_file_perms;
+
+allow init ax_ram_plus_data_file:dir search;
+allow init ax_ram_plus_data_file:file rw_file_perms;
+
+neverallow appdomain ax_ram_plus_data_file:dir_file_class_set *;

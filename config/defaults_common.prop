@@ -46,3 +46,9 @@ ro.egl.blobcache.multifile_limit=67108864
 # vulkan first
 debug.renderengine.backend=skiavkthreaded
 debug.hwui.renderer=skiavk
+
+# ram plus
+persist.sys.axion.ram_plus.supported=true
+persist.sys.axion.ram_plus.size_mb=0
+persist.sys.axion.ram_plus.active_kb=0
+persist.sys.axion.ram_plus.status=disabled

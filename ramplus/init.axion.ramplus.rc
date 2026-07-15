@@ -1,0 +1,17 @@
+service ax_ram_plus_setup /system_ext/bin/ax_ram_plus_setup
+    class late_start
+    user root
+    group system
+    capabilities SYS_ADMIN
+    disabled
+    oneshot
+
+on load_persist_props_action
+    setprop persist.sys.axion.ram_plus.active_kb 0
+    setprop persist.sys.axion.ram_plus.status disabled
+
+on property:sys.boot_completed=1 && property:persist.sys.axion.ram_plus.supported=true
+    start ax_ram_plus_setup
+
+on property:init.svc.ax_ram_plus_setup=stopped
+    exec_background /system/bin/lmkd --reinit

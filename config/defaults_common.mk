@@ -15,7 +15,10 @@ PRODUCT_PACKAGES += \
     GameSpace \
     OmniJaws \
     ColumbusService \
-    AxDiagnostics
+    AxDiagnostics \
+    ax_ram_plus_setup
+
+$(call soong_config_set_bool,lmkd,use_hooks,true)
 
 # eliminate interpreter overhead
 PRODUCT_DEXPREOPT_SPEED_APPS += \
