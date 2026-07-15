@@ -11,9 +11,6 @@ persist.sys.disable_rescue=true
 
 # sf
 ro.surface_flinger.uclamp.min=165
-debug.sf.region_sampling_duration_ns=12000000
-debug.sf.region_sampling_period_ns=2000000000
-debug.sf.region_sampling_timer_timeout_ns=1000000000
 
 # sound
 audio.safemedia.bypass=1
