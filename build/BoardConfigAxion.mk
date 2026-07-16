@@ -1,0 +1,1 @@
+-include device/axion/common/config/soc_map.mk

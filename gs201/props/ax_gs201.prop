@@ -1,0 +1,14 @@
+# dynamic duration
+persist.sys.sf.dynamic_duration.switch=1
+persist.sys.sf.dynamic_duration.sf.late.60=10500000
+persist.sys.sf.dynamic_duration.app.late.60=16600000
+persist.sys.sf.dynamic_duration.sf.early.60=16600000
+persist.sys.sf.dynamic_duration.app.early.60=16600000
+persist.sys.sf.dynamic_duration.sf.earlyGl.60=16600000
+persist.sys.sf.dynamic_duration.app.earlyGl.60=16600000
+persist.sys.sf.dynamic_duration.sf.late.120=7200000
+persist.sys.sf.dynamic_duration.app.late.120=11600000
+persist.sys.sf.dynamic_duration.sf.early.120=13300000
+persist.sys.sf.dynamic_duration.app.early.120=11600000
+persist.sys.sf.dynamic_duration.sf.earlyGl.120=13300000
+persist.sys.sf.dynamic_duration.app.earlyGl.120=11600000

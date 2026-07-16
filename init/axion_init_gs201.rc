@@ -1,0 +1,66 @@
+on early-init
+    write /dev/cpuctl/foreground/cpu.uclamp.max max
+    write /dev/cpuctl/top-app/cpu.uclamp.max max
+
+on init
+    chown system system /dev/cpu_dma_latency
+    chmod 0664 /dev/cpu_dma_latency
+
+on post-fs-data
+    chown system system /proc/vendor_sched/dvfs_headroom
+    chown system system /proc/vendor_sched/util_threshold
+    chown system system /proc/vendor_sched/tapered_dvfs_headroom_enable
+    chown system system /proc/vendor_sched/reduce_prefer_idle
+    chown system system /proc/vendor_sched/groups/ta/uclamp_min
+    chown system system /proc/vendor_sched/groups/fg/uclamp_min
+    chmod 0664 /proc/vendor_sched/dvfs_headroom
+    chmod 0664 /proc/vendor_sched/util_threshold
+    chmod 0664 /proc/vendor_sched/tapered_dvfs_headroom_enable
+    chmod 0664 /proc/vendor_sched/reduce_prefer_idle
+    chmod 0664 /proc/vendor_sched/groups/ta/uclamp_min
+    chmod 0664 /proc/vendor_sched/groups/fg/uclamp_min
+
+    write /sys/kernel/vendor_mm/kswapd_cpu_affinity 7f
+
+    chown system system /dev/blkio/blkio.weight
+    chown system system /dev/blkio/background/blkio.weight
+    chmod 0664 /dev/blkio/blkio.weight
+    chmod 0664 /dev/blkio/background/blkio.weight
+
+    write /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/up_rate_limit_us 0
+    write /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/up_rate_limit_us 0
+    write /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/up_rate_limit_us 0
+    write /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/down_rate_limit_us 20000
+    write /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/down_rate_limit_us 20000
+    write /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/down_rate_limit_us 20000
+    chown system system /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/up_rate_limit_us
+    chown system system /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/up_rate_limit_us
+    chown system system /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/up_rate_limit_us
+    chown system system /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/down_rate_limit_us
+    chown system system /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/down_rate_limit_us
+    chown system system /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/down_rate_limit_us
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/up_rate_limit_us
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/up_rate_limit_us
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/up_rate_limit_us
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/down_rate_limit_us
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/down_rate_limit_us
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/down_rate_limit_us
+
+    chown system system /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/down_rate_limit_scale_pow
+    chown system system /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/down_rate_limit_scale_pow
+    chown system system /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/down_rate_limit_scale_pow
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy0/sched_pixel/down_rate_limit_scale_pow
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy4/sched_pixel/down_rate_limit_scale_pow
+    chmod 0664 /sys/devices/system/cpu/cpufreq/policy6/sched_pixel/down_rate_limit_scale_pow
+
+    chown system system /sys/devices/platform/17000010.devfreq_mif/devfreq/17000010.devfreq_mif/min_freq
+    chmod 0664 /sys/devices/platform/17000010.devfreq_mif/devfreq/17000010.devfreq_mif/min_freq
+
+    chown system system /sys/devices/platform/28000000.mali/hint_min_freq
+    chmod 0664 /sys/devices/platform/28000000.mali/hint_min_freq
+
+    chown system system /sys/devices/platform/17000020.devfreq_int/devfreq/17000020.devfreq_int/min_freq
+    chmod 0664 /sys/devices/platform/17000020.devfreq_int/devfreq/17000020.devfreq_int/min_freq
+
+    chown system system /sys/devices/platform/1c240000.drmdecon/early_wakeup
+    chmod 0664 /sys/devices/platform/1c240000.drmdecon/early_wakeup
