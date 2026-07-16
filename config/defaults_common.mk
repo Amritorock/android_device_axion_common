@@ -2,6 +2,7 @@ include device/axion/common/config/soc_map.mk
 
 $(call inherit-product-if-exists, device/axion/common/$(AXION_SOC)/product.mk)
 
+include device/axion/common/config/version.mk
 include device/axion/common/config/dexpreopt.mk
 include device/axion/common/config/packages.mk
 include device/axion/common/config/properties.mk
