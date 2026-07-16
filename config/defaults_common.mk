@@ -1,18 +1,10 @@
 
 
+include device/axion/common/config/dexpreopt.mk
 include device/axion/common/config/packages.mk
 include device/axion/common/config/properties.mk
 
 $(call soong_config_set_bool,lmkd,use_hooks,true)
-
-# eliminate interpreter overhead
-PRODUCT_DEXPREOPT_SPEED_APPS += \
-    Settings \
-    AxThemePicker \
-    AxionParts \
-    EdgeLauncher \
-    GameSpace \
-    AppLocker
 
 TARGET_DISABLES_LIBPERF ?= false
 TARGET_SHIPS_AXION_KERNEL_MODULES ?= false
