@@ -1,0 +1,24 @@
+type sysfs_ax_binder_ux, fs_type, sysfs_type;
+
+allow system_server proc_ax_atcm:dir r_dir_perms;
+allow system_server proc_ax_atcm:file rw_file_perms;
+allow system_server proc_ax_boost:dir r_dir_perms;
+allow system_server proc_ax_boost:file rw_file_perms;
+allow system_server proc_ax_burst_sched:dir r_dir_perms;
+allow system_server proc_ax_burst_sched:file rw_file_perms;
+allow system_server proc_ax_frame_boost:dir r_dir_perms;
+allow system_server proc_ax_frame_boost:file rw_file_perms;
+allow system_server proc_ax_thread_snooper:dir r_dir_perms;
+allow system_server proc_ax_thread_snooper:file rw_file_perms;
+allow system_server sysfs_ax_binder_ux:dir r_dir_perms;
+allow system_server sysfs_ax_binder_ux:file rw_file_perms;
+allow system_server axion_perf_config_file:file r_file_perms;
+
+allow shell sysfs_ax_binder_ux:dir r_dir_perms;
+allow shell sysfs_ax_binder_ux:file r_file_perms;
+allow shell proc_ax_atcm:dir r_dir_perms;
+allow shell proc_ax_atcm:file r_file_perms;
+allow shell proc_ax_boost:dir r_dir_perms;
+allow shell proc_ax_boost:file r_file_perms;
+allow shell proc_ax_burst_sched:dir r_dir_perms;
+allow shell proc_ax_burst_sched:file r_file_perms;

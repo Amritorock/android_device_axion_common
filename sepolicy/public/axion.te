@@ -1,0 +1,6 @@
+type proc_ax_atcm, fs_type, proc_type;
+type proc_ax_boost, fs_type, proc_type;
+type proc_ax_burst_sched, fs_type, proc_type;
+type proc_ax_frame_boost, fs_type, proc_type;
+type proc_ax_thread_snooper, fs_type, proc_type;
+type axion_perf_config_file, system_file_type, file_type;
