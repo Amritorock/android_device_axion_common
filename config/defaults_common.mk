@@ -5,14 +5,11 @@ $(call inherit-product-if-exists, device/axion/common/$(AXION_SOC)/product.mk)
 include device/axion/common/config/version.mk
 include device/axion/common/config/dexpreopt.mk
 include device/axion/common/config/packages.mk
+include device/axion/common/config/flags.mk
 include device/axion/common/config/properties.mk
 include device/axion/common/config/product.mk
 
 $(call soong_config_set_bool,lmkd,use_hooks,true)
-
-TARGET_DISABLES_LIBPERF ?= false
-TARGET_SHIPS_AXION_KERNEL_MODULES ?= false
-TARGET_SUPPORTS_KERNEL_MANAGER ?= false
 
 #vulkan-first
 TARGET_USES_VULKAN := true
@@ -25,7 +22,3 @@ PRODUCT_COPY_FILES += \
 	frameworks/native/data/etc/android.software.vulkan.deqp.level-2025-03-01.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.vulkan.deqp.level.xml \
 	frameworks/native/data/etc/android.software.opengles.deqp.level-2025-03-01.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.opengles.deqp.level.xml
 	
-TARGET_NEEDS_VULKAN_MEDIA_FIX ?= false
-
-PRODUCT_PRODUCT_PROPERTIES += \
-    persist.sys.vk_use_ogl_for_media=$(TARGET_NEEDS_VULKAN_MEDIA_FIX)
