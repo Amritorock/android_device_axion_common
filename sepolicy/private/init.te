@@ -1,0 +1,2 @@
+allow init proc_vendor_sched:file { w_file_perms setattr };
+allow init sysfs_devices_system_cpu:file w_file_perms;
