@@ -3,34 +3,6 @@ package {
 }
 
 prebuilt_etc {
-    name: "ax_init_gs101",
-    src: "init/ax_init_gs101.rc",
-    sub_dir: "init",
-    vendor: true,
-}
-
-prebuilt_etc {
-    name: "ax_init_gs201",
-    src: "init/ax_init_gs201.rc",
-    sub_dir: "init",
-    vendor: true,
-}
-
-prebuilt_etc {
-    name: "ax_init_zuma",
-    src: "init/ax_init_zuma.rc",
-    sub_dir: "init",
-    vendor: true,
-}
-
-prebuilt_etc {
-    name: "ax_init_holi",
-    src: "init/ax_init_holi.rc",
-    sub_dir: "init",
-    vendor: true,
-}
-
-prebuilt_etc {
     name: "init_axion_common",
     src: "init/init.axion.rc",
     filename: "init.axion-common.rc",
