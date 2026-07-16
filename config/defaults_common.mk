@@ -13,3 +13,4 @@ include device/axion/common/config/ramplus/ramplus.mk
 
 PRODUCT_PACKAGE_OVERLAYS += device/axion/common/overlay
 
+PRODUCT_SOONG_NAMESPACES += device/axion/common
