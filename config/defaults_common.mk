@@ -9,6 +9,6 @@ include device/axion/common/config/flags.mk
 include device/axion/common/config/properties.mk
 include device/axion/common/config/product.mk
 include device/axion/common/config/vulkan/vulkan.mk
+include device/axion/common/config/ramplus/ramplus.mk
 
-$(call soong_config_set_bool,lmkd,use_hooks,true)
 

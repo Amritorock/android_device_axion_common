@@ -7,10 +7,10 @@ service ax_ram_plus_setup /system_ext/bin/ax_ram_plus_setup
     oneshot
 
 on load_persist_props_action
-    setprop persist.sys.axion.ram_plus.active_kb 0
-    setprop persist.sys.axion.ram_plus.status disabled
+    setprop persist.sys.ax_rp_active_kb 0
+    setprop persist.sys.ax_rp_status disabled
 
-on property:sys.boot_completed=1 && property:persist.sys.axion.ram_plus.supported=true
+on property:sys.boot_completed=1 && property:persist.sys.ax_rp_supp=true
     start ax_ram_plus_setup
 
 on property:init.svc.ax_ram_plus_setup=stopped

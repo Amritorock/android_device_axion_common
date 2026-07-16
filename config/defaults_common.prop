@@ -45,7 +45,7 @@ debug.renderengine.backend=skiavkthreaded
 debug.hwui.renderer=skiavk
 
 # ram plus
-persist.sys.axion.ram_plus.supported=true
-persist.sys.axion.ram_plus.size_mb=0
-persist.sys.axion.ram_plus.active_kb=0
-persist.sys.axion.ram_plus.status=disabled
+persist.sys.ax_rp_supp=true
+persist.sys.ax_rp_size_mb=0
+persist.sys.ax_rp_active_kb=0
+persist.sys.ax_rp_status=disabled
