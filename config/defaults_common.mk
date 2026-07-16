@@ -11,4 +11,5 @@ include device/axion/common/config/product.mk
 include device/axion/common/config/vulkan/vulkan.mk
 include device/axion/common/config/ramplus/ramplus.mk
 
+PRODUCT_PACKAGE_OVERLAYS += device/axion/common/overlay
 
