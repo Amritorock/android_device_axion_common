@@ -5,6 +5,7 @@ $(call inherit-product-if-exists, device/axion/common/$(AXION_SOC)/product.mk)
 include device/axion/common/config/dexpreopt.mk
 include device/axion/common/config/packages.mk
 include device/axion/common/config/properties.mk
+include device/axion/common/config/product.mk
 
 $(call soong_config_set_bool,lmkd,use_hooks,true)
 

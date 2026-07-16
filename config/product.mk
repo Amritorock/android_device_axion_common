@@ -1,0 +1,9 @@
+PRODUCT_PACKAGES += init_axion_common
+
+ifeq ($(TARGET_SHIPS_AXION_KERNEL_MODULES),true)
+PRODUCT_PACKAGES += init_axion_modules
+endif
+
+ifneq ($(filter true,$(TARGET_SUPPORTS_KERNEL_MANAGER) $(TARGET_SHIPS_AXION_KERNEL_MODULES)),)
+TARGET_DISABLES_LIBPERF := true
+endif
