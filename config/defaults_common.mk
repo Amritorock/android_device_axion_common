@@ -1,8 +1,7 @@
-TARGET_PRODUCT_PROP += \
-    device/axion/common/config/defaults_common.prop
 
 
 include device/axion/common/config/packages.mk
+include device/axion/common/config/properties.mk
 
 $(call soong_config_set_bool,lmkd,use_hooks,true)
 
