@@ -53,4 +53,4 @@ PRODUCT_PRODUCT_PROPERTIES += \
     persist.sys.device_camera_info_rear=$(AXION_CAMERA_REAR_INFO) \
     persist.sys.device_camera_info_front=$(AXION_CAMERA_FRONT_INFO) \
     persist.sys.axion_maintainer=$(AXION_MAINTAINER) \
-    persist.sys.axion_processor_info=$(AXION_PROCESSOR)
+    persist.sys.axion_cpu_info=$(AXION_PROCESSOR)
