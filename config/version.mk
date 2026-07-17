@@ -4,6 +4,8 @@ PRODUCT_RELEASE_TYPE = ONEIRA_FINAL
 
 LINEAGE_TARGET_PACKAGE_NAME ?= axion
 
+include vendor/official_devices/infra/official_devices.mk
+
 CURRENT_DEVICE := $(TARGET_DEVICE)
 ifeq ($(CURRENT_DEVICE),)
 CURRENT_DEVICE := $(patsubst lineage_%,%,$(TARGET_PRODUCT))
