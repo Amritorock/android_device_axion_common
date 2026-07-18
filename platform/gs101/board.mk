@@ -1,4 +1,4 @@
-PRODUCT_SOONG_NAMESPACES += device/axion/common/gs101
+PRODUCT_SOONG_NAMESPACES += device/axion/common/platform/gs101
 
 include device/axion/common/config/board/tensor.mk
 include device/axion/common/config/board/common.mk

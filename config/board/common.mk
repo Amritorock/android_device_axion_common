@@ -22,7 +22,7 @@ $(shell python3 device/axion/common/build/gen_axion_props.py $(AXION_GEN_PROP) \
   persist.sys.ax_disable_pwrhal=$(TARGET_DISABLES_LIBPERF))
 
 TARGET_PRODUCT_PROP += \
-    device/axion/common/$(AXION_SOC)/props/ax_$(AXION_SOC).prop \
+    device/axion/common/platform/$(AXION_SOC)/props/ax_$(AXION_SOC).prop \
     $(AXION_GEN_PROP)
 
 PRODUCT_COPY_FILES += \

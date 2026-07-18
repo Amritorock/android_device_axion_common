@@ -1,3 +1,3 @@
 AXION_SOC := $(TARGET_BOARD_PLATFORM)
 
--include device/axion/common/$(AXION_SOC)/board.mk
+-include device/axion/common/platform/$(AXION_SOC)/board.mk
