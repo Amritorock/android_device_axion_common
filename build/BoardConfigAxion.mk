@@ -1,4 +1,5 @@
 -include device/axion/common/config/soc_map.mk
+include device/axion/common/config/board/properties_flags.mk
 
 ifeq ($(TARGET_SHIPS_AXION_KERNEL_MODULES),true)
 include device/axion/common/config/board/kernel_modules.mk

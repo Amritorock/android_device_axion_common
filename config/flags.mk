@@ -3,6 +3,8 @@ BYPASS_CHARGE_SUPPORTED ?= false
 
 # perf mode
 PERF_DEFAULT_GOV ?= schedutil
+TARGET_DISABLES_LIBPERF ?= false
+TARGET_NEEDS_VULKAN_MEDIA_FIX ?= false
 
 # HBM
 HBM_SUPPORTED ?= false
