@@ -19,5 +19,3 @@ AXION_KERNEL_MODULES_AX_BOOST_L3_PROVIDER := n
 
 # Media Vulkan
 TARGET_NEEDS_VULKAN_MEDIA_FIX := true
-
-include device/axion/common/config/board/common.mk

@@ -6,5 +6,53 @@ on zygote-start && property:persist.sys.ax_hbm_supp=true && property:persist.sys
     chown system system ${persist.sys.hbmservice_file}
     chmod 0775 ${persist.sys.hbmservice_file}
 
-on property:sys.boot_completed=* && property:persist.sys.ax_touch_boost=true && property:persist.sys.touchboost_enable=*
-    setprop persist.vendor.touch_sensitivity_mode ${persist.sys.touchboost_enable}
+on boot
+    chown system system /proc/ax_named_thread_affinity/pid
+    chmod 0664 /proc/ax_named_thread_affinity/pid
+    chown system system /proc/ax_named_thread_affinity/named_thread_affinity
+    chmod 0664 /proc/ax_named_thread_affinity/named_thread_affinity
+    chown system system /proc/ax_named_thread_affinity/reset
+    chmod 0664 /proc/ax_named_thread_affinity/reset
+
+    chown system system /proc/ax_dragonite/boost
+    chmod 0664 /proc/ax_dragonite/boost
+    chown system system /proc/ax_dragonite/kswapd_pin
+    chmod 0664 /proc/ax_dragonite/kswapd_pin
+    chown system system /proc/ax_dragonite/stats
+    chmod 0444 /proc/ax_dragonite/stats
+
+    mkdir /dev/cpuctl/restricted
+    chown system system /dev/cpuctl/restricted
+    chown system system /dev/cpuctl/restricted/cgroup.procs
+    chown system system /dev/cpuctl/restricted/cpu.uclamp.latency_sensitive
+    chown system system /dev/cpuctl/restricted/cpu.uclamp.max
+    chown system system /dev/cpuctl/restricted/cpu.uclamp.min
+    chown system system /dev/cpuctl/restricted/tasks
+    chmod 0664 /dev/cpuctl/restricted/cgroup.procs
+    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.latency_sensitive
+    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/restricted/tasks
+
+    chown system system /dev/cpuctl/system/cpu.uclamp.min
+    chown system system /dev/cpuctl/system/cpu.uclamp.max
+    chown system system /dev/cpuctl/system/cpu.uclamp.latency_sensitive
+    chmod 0664 /dev/cpuctl/system/cpu.uclamp.min
+    chmod 0664 /dev/cpuctl/system/cpu.uclamp.max
+    chmod 0664 /dev/cpuctl/system/cpu.uclamp.latency_sensitive
+
+    chown system system /dev/cpuset/top-app/cpus
+    chown system system /dev/cpuset/foreground/cpus
+    chown system system /dev/cpuset/system-background/cpus
+    chown system system /dev/cpuset/background/cpus
+    chown system system /dev/cpuset/restricted/cpus
+    chown system system /dev/cpuset/camera-daemon/cpus
+    chown system system /dev/cpuset/dex2oat/cpus
+
+    chmod 0664 /dev/cpuset/top-app/cpus
+    chmod 0664 /dev/cpuset/foreground/cpus
+    chmod 0664 /dev/cpuset/system-background/cpus
+    chmod 0664 /dev/cpuset/background/cpus
+    chmod 0664 /dev/cpuset/restricted/cpus
+    chmod 0664 /dev/cpuset/camera-daemon/cpus
+    chmod 0664 /dev/cpuset/dex2oat/cpus

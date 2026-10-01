@@ -14,8 +14,12 @@ def main():
         sys.exit(1)
 
     output_path = sys.argv[1]
+    if not output_path or output_path == '/axion_build.props.prop':
+        sys.exit(0)
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
 
     with open(output_path, 'w') as f:
         for pair in sys.argv[2:]:

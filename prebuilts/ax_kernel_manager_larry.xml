@@ -1,22 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Kernel Manager config — SM6150 (Snapdragon 675)
-    Xiaomi Redmi Note 7 Pro (violet)
-
-      policy0 (cpu0-5, 6 cores)
-        300 MHz - 1708.8 MHz
-
-      policy6 (cpu6-7, 2 cores)
-        300 MHz - 2016 MHz
-
-      GPU
-        Adreno 612
+    Kernel Manager config — OnePlus Nord CE 2 Lite 5G (larry)
+    Snapdragon 695 5G (SM6375)
 -->
 <kernel-manager>
-
     <cpu
         id="little"
-        group="Silver CPU"
+        group="Little CPU"
         minId="axion_min_freq"
         maxId="axion_max_freq"
         governorId="little_cpu_governor"
@@ -28,7 +18,7 @@
 
     <cpu
         id="big"
-        group="Gold CPU"
+        group="Big CPU"
         minId="axion_min_freq_big"
         maxId="axion_max_freq_big"
         governorId="big_cpu_governor"
@@ -42,7 +32,7 @@
         node="/sys/class/kgsl/kgsl-3d0/devfreq"
         currentNode="/sys/class/kgsl/kgsl-3d0/gpuclk"
         usageNode="/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage"
+        availablePath="/sys/class/kgsl/kgsl-3d0/devfreq/available_frequencies"
         frequencyMultiplier="1"
-        values="290000000,435000000,550000000,700000000,745000000,845000000" />
-
+        values="275000000,400000000,500000000,625000000" />
 </kernel-manager>

@@ -1,4 +1,8 @@
-AXION_GEN_PROP := $(PRODUCT_OUT)/axion_build.props.prop
+AXION_TARGET_DEVICE := $(strip $(or $(TARGET_DEVICE),$(PRODUCT_DEVICE)))
+ifneq ($(AXION_TARGET_DEVICE),)
+AXION_OUT_DIR := $(strip $(or $(PRODUCT_OUT),$(if $(OUT_DIR),$(OUT_DIR),out)/target/product/$(AXION_TARGET_DEVICE)))
+AXION_GEN_PROP := $(AXION_OUT_DIR)/axion_build.props.prop
+
 $(shell python3 device/axion/common/build/gen_axion_props.py $(AXION_GEN_PROP) \
   persist.sys.ax_chg_bypass=$(BYPASS_CHARGE_SUPPORTED) \
   persist.sys.ax_hbm_supp=$(HBM_SUPPORTED) \
@@ -13,3 +17,4 @@ $(shell python3 device/axion/common/build/gen_axion_props.py $(AXION_GEN_PROP) \
   persist.sys.ax_disable_pwrhal=$(TARGET_DISABLES_LIBPERF))
 
 TARGET_PRODUCT_PROP += $(AXION_GEN_PROP)
+endif

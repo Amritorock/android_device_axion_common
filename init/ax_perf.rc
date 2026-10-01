@@ -16,30 +16,3 @@ on boot
 
     chown system system /sys/devices/platform/17000010.devfreq_mif/devfreq/17000010.devfreq_mif/min_freq
     chmod 0664 /sys/devices/platform/17000010.devfreq_mif/devfreq/17000010.devfreq_mif/min_freq
-
-    chown system system /proc/ax_named_thread_affinity/pid
-    chmod 0664 /proc/ax_named_thread_affinity/pid
-    chown system system /proc/ax_named_thread_affinity/named_thread_affinity
-    chmod 0664 /proc/ax_named_thread_affinity/named_thread_affinity
-    chown system system /proc/ax_named_thread_affinity/reset
-    chmod 0664 /proc/ax_named_thread_affinity/reset
-
-    chown system system /proc/ax_dragonite/boost
-    chmod 0664 /proc/ax_dragonite/boost
-    chown system system /proc/ax_dragonite/kswapd_pin
-    chmod 0664 /proc/ax_dragonite/kswapd_pin
-    chown system system /proc/ax_dragonite/stats
-    chmod 0444 /proc/ax_dragonite/stats
-
-    mkdir /dev/cpuctl/restricted
-    chown system system /dev/cpuctl/restricted
-    chown system system /dev/cpuctl/restricted/cgroup.procs
-    chown system system /dev/cpuctl/restricted/cpu.uclamp.latency_sensitive
-    chown system system /dev/cpuctl/restricted/cpu.uclamp.max
-    chown system system /dev/cpuctl/restricted/cpu.uclamp.min
-    chown system system /dev/cpuctl/restricted/tasks
-    chmod 0664 /dev/cpuctl/restricted/cgroup.procs
-    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.latency_sensitive
-    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.max
-    chmod 0664 /dev/cpuctl/restricted/cpu.uclamp.min
-    chmod 0664 /dev/cpuctl/restricted/tasks
