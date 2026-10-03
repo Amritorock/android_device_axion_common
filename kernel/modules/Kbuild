@@ -3,3 +3,4 @@
 
 obj-m += ax_dragonite/
 obj-m += bore_sched/
+obj-m += latency_sched/

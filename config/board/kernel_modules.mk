@@ -21,6 +21,23 @@ BOARD_VENDOR_KERNEL_MODULES_LOAD := \
     $(filter-out bore_sched.ko,$(BOARD_VENDOR_KERNEL_MODULES_LOAD))
 endif
 
+ifeq ($(TARGET_USE_LATENCY_SCHED),false)
+ifneq ($(wildcard $(TARGET_KERNEL_SOURCE)/include/trace/hooks/latency.h $(KERNEL_SRC)/include/trace/hooks/latency.h $(TARGET_KERNEL_HEADERS)/include/trace/hooks/latency.h out-kernel/google/gs-6.1/aosp/include/trace/hooks/latency.h),)
+TARGET_USE_LATENCY_SCHED := true
+endif
+endif
+
+ifeq ($(TARGET_USE_LATENCY_SCHED),true)
+AXION_COMMON_KERNEL_MODULES += \
+    latency_sched
+BOARD_VENDOR_KERNEL_MODULES_LOAD := \
+    $(filter-out latency_sched.ko,$(BOARD_VENDOR_KERNEL_MODULES_LOAD)) \
+    latency_sched.ko
+else
+BOARD_VENDOR_KERNEL_MODULES_LOAD := \
+    $(filter-out latency_sched.ko,$(BOARD_VENDOR_KERNEL_MODULES_LOAD))
+endif
+
 ifneq ($(strip $(TARGET_KERNEL_SOURCE)),)
 ifeq ($(strip $(TARGET_PREBUILT_KERNEL)),)
 ifneq ($(wildcard $(TARGET_KERNEL_SOURCE)/Makefile),)

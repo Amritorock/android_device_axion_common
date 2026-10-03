@@ -45,6 +45,11 @@ ifeq ($(TARGET_USE_BORE_SCHED),true)
 PRODUCT_COPY_FILES += \
     device/axion/common/init/init.axion.modules.bore.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.axion.modules.bore.rc
 endif
+
+ifeq ($(TARGET_USE_LATENCY_SCHED),true)
+PRODUCT_COPY_FILES += \
+    device/axion/common/init/init.axion.modules.latency.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.axion.modules.latency.rc
+endif
 endif
 
 AXION_PLATFORM_INIT_RC := $(firstword $(wildcard \
