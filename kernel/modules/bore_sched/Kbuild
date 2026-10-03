@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2021-2024 Masahito S. <firelzrd@gmail.com>
+# Copyright (C) 2025-2026 AxionOS
+
+MODULE_NAME := bore_sched
+
+obj-m += $(MODULE_NAME).o
+
+$(MODULE_NAME)-y := \
+	bore_sched_main.o
+
+ccflags-y += -I$(src) -I$(src)/include
+

@@ -40,6 +40,11 @@ PRODUCT_COPY_FILES += \
 ifeq ($(TARGET_SHIPS_AXION_KERNEL_MODULES),true)
 PRODUCT_COPY_FILES += \
     device/axion/common/init/init.axion.modules.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.axion.modules.rc
+
+ifeq ($(TARGET_USE_BORE_SCHED),true)
+PRODUCT_COPY_FILES += \
+    device/axion/common/init/init.axion.modules.bore.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.axion.modules.bore.rc
+endif
 endif
 
 AXION_PLATFORM_INIT_RC := $(firstword $(wildcard \
