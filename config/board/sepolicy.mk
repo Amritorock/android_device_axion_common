@@ -7,3 +7,7 @@ ifneq (,$(filter device/qcom/sepolicy_vndr/legacy-um/generic/vendor/common, $(BO
 BOARD_SEPOLICY_M4DEFS += HAS_KGSL_MAX_GPUCLK=true
 endif
 endif
+
+ifneq ($(filter mt%,$(TARGET_BOARD_PLATFORM)),)
+BOARD_VENDOR_SEPOLICY_DIRS += device/axion/common/sepolicy/vendor/mtk
+endif

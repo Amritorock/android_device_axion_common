@@ -34,6 +34,8 @@ r_dir_file(ax_diagnostics, domain)
 # sysfs
 allow ax_diagnostics sysfs_devices_system_cpu:dir r_dir_perms;
 allow ax_diagnostics sysfs_devices_system_cpu:file r_file_perms;
+allow ax_diagnostics sysfs_devices_block:dir r_dir_perms;
+allow ax_diagnostics sysfs_devices_block:file r_file_perms;
 allow ax_diagnostics sysfs_thermal:dir r_dir_perms;
 allow ax_diagnostics sysfs_thermal:file r_file_perms;
 allow ax_diagnostics sysfs_batteryinfo:dir r_dir_perms;
