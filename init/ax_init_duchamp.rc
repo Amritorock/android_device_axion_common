@@ -1,0 +1,40 @@
+#
+# Copyright (C) 2026 AxionOS
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+on post-fs-data
+    # CPU cluster scaling governor and frequencies
+    chown system system /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+    chown system system /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq
+    chown system system /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+    chown system system /sys/devices/system/cpu/cpufreq/policy4/scaling_governor
+    chown system system /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq
+    chown system system /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
+    chown system system /sys/devices/system/cpu/cpufreq/policy7/scaling_governor
+    chown system system /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq
+    chown system system /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq
+
+    # Mali GPU nodes (MediaTek Dimensity 8300)
+    chown system system /sys/devices/platform/soc/13000000.mali/devfreq/13000000.mali/min_freq
+    chown system system /sys/devices/platform/soc/13000000.mali/devfreq/13000000.mali/max_freq
+    chown system system /sys/devices/platform/soc/13000000.mali/devfreq/13000000.mali/governor
+    chown system system /sys/module/ged/parameters/gpu_loading
+
+    # CPU permissions
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy4/scaling_governor
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy7/scaling_governor
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq
+    chmod 0660 /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq
+
+    # GPU permissions
+    chmod 0660 /sys/devices/platform/soc/13000000.mali/devfreq/13000000.mali/min_freq
+    chmod 0660 /sys/devices/platform/soc/13000000.mali/devfreq/13000000.mali/max_freq
+    chmod 0660 /sys/devices/platform/soc/13000000.mali/devfreq/13000000.mali/governor
+    chmod 0664 /sys/module/ged/parameters/gpu_loading

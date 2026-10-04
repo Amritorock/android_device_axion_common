@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-FileCopyrightText: AxionOS
+  SPDX-License-Identifier: Apache-2.0
+
+  Performance/Thermal configuration - MediaTek Dimensity 8300 (mt6897)
+  Target Device: POCO X6 Pro 5G / Redmi K70E (duchamp)
+
+  CPU OPP (MHz):
+  - Silver (Little): 480, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200
+  - Gold (Mid):     400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500, 2600, 2660, 2800, 2850, 2900, 3000, 3100, 3200
+  - Gold Prime:     400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3050, 3100, 3200, 3350
+
+  GPU OPP (MHz):
+  - Mali-G615:      265, 403, 522, 641, 760, 852, 948, 1045, 1142, 1238, 1400
+-->
+
+<perf-config>
+    <atmc>
+        <!-- CPU Frequency Ladder -->
+        <cpu_levels>
+            <level id="1"  little="0,2200" big="0,3200" prime="0,3350"/>
+            <level id="2"  little="0,2200" big="0,3200" prime="0,3200"/>
+            <level id="3"  little="0,2200" big="0,3000" prime="0,3100"/>
+            <level id="4"  little="0,2100" big="0,3000" prime="0,3000"/>
+            <level id="5"  little="0,2100" big="0,2850" prime="0,2900"/>
+            <level id="6"  little="0,2000" big="0,2800" prime="0,2800"/>
+            <level id="7"  little="0,2000" big="0,2660" prime="0,2700"/>
+            <level id="8"  little="0,1900" big="0,2600" prime="0,2600"/>
+            <level id="9"  little="0,1900" big="0,2500" prime="0,2500"/>
+            <level id="10" little="0,1800" big="0,2400" prime="0,2400"/>
+            <level id="11" little="0,1800" big="0,2300" prime="0,2300"/>
+            <level id="12" little="0,1700" big="0,2200" prime="0,2200"/>
+            <level id="13" little="0,1700" big="0,2100" prime="0,2100"/>
+            <level id="14" little="0,1600" big="0,2000" prime="0,2000"/>
+            <level id="15" little="0,1600" big="0,1900" prime="0,1900"/>
+            <level id="16" little="0,1500" big="0,1800" prime="0,1800"/>
+            <level id="17" little="0,1400" big="0,1700" prime="0,1700"/>
+            <level id="18" little="0,1300" big="0,1600" prime="0,1600"/>
+            <level id="19" little="0,1200" big="0,1500" prime="0,1500"/>
+            <level id="20" little="0,1100" big="0,1400" prime="0,1400"/>
+            <level id="21" little="0,1000" big="0,1300" prime="0,1300"/>
+            <level id="22" little="0,900"  big="0,1100" prime="0,1100"/>
+            <level id="23" little="0,800"  big="0,900"  prime="0,900"/>
+            <level id="24" little="0,700"  big="0,800"  prime="0,800"/>
+            <level id="25" little="0,600"  big="0,600"  prime="0,600"/>
+            <level id="26" little="0,480"  big="0,500"  prime="0,500"/>
+            <level id="27" little="0,480"  big="0,400"  prime="0,400"/>
+        </cpu_levels>
+
+        <!-- GPU Frequency Ladder (clocks in MHz) -->
+        <gpu_levels>
+            <level id="1"  min="1400" max="1400"/>
+            <level id="2"  min="1238" max="1238"/>
+            <level id="3"  min="1142" max="1142"/>
+            <level id="4"  min="1045" max="1045"/>
+            <level id="5"  min="948"  max="948"/>
+            <level id="6"  min="852"  max="852"/>
+            <level id="7"  min="760"  max="760"/>
+            <level id="8"  min="641"  max="641"/>
+            <level id="9"  min="522"  max="522"/>
+            <level id="10" min="403"  max="403"/>
+            <level id="11" min="265"  max="265"/>
+        </gpu_levels>
+
+        <!-- Base Profiles / Scenes -->
+        <scenes>
+            <scene name="default_scene">
+                <level id="5">
+                    <action unit="cpu" status="5"/>
+                </level>
+                <level id="8">
+                    <action unit="cpu" status="8"/>
+                </level>
+                <level id="9">
+                    <action unit="cpu" status="10"/>
+                    <action unit="dexopt" status="1"/>
+                </level>
+                <level id="10">
+                    <action unit="cpu" status="12"/>
+                    <action unit="bg_killer" status="3"/>
+                </level>
+                <level id="11">
+                    <action unit="cpu" status="14"/>
+                    <action unit="bg_killer" status="4"/>
+                </level>
+                <level id="12">
+                    <action unit="cpu" status="16"/>
+                </level>
+                <level id="13">
+                    <action unit="cpu" status="18"/>
+                </level>
+            </scene>
+        </scenes>
+
+        <!-- App Specific Thermal Profiles -->
+        <apps>
+            <!-- Navigation apps: Tuned to prevent dashboard overheating under direct sun -->
+            <app pkgs="com.google.android.apps.maps,com.autonavi.minimap,com.baidu.BaiduMap,org.microg.tools.selfupdate">
+                <level id="7">
+                    <action unit="cpu" status="12"/>
+                </level>
+                <level id="10">
+                    <action unit="cpu" status="20"/>
+                </level>
+            </app>
+
+            <!-- Heavy Games (Genshin, PUBG, etc.): Tuned for sustained thermal stability over burst spikes -->
+            <app pkgs="com.tencent.tmgp.pubgmhd,com.epicgames.fortnite,com.miHoYo.GenshinImpact,com.miHoYo.hkrpg,com.mojang.minecraftpe,com.HoYoverse.hkrpgoversea,com.miHoYo.Yuanshen,com.pubg.imobile,com.activision.callofduty.shooter,com.dts.freefireth,com.dts.freefiremax">
+                <level id="5">
+                    <action unit="cpu" status="8"/>
+                </level>
+                <level id="9">
+                    <action unit="cpu" status="12"/>
+                </level>
+                <level id="11">
+                    <action unit="cpu" status="18"/>
+                </level>
+            </app>
+        </apps>
+    </atmc>
+</perf-config>
